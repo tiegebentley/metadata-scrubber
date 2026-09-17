@@ -1,0 +1,14 @@
+{
+  "_comment": "Real fixtures land in issues 4-9. Each format PR must add its fixture here.",
+  "fixtures": [
+    {
+      "path": "dummy.png",
+      "kind": "image",
+      "has_c2pa": false,
+      "lossy_allowed": false,
+      "lossy_reason": null,
+      "expected_stripped_tags": ["Software"],
+      "skip_if_unimplemented": true
+    }
+  ]
+}
