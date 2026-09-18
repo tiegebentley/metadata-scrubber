@@ -9,5 +9,3 @@ venv/
 build/
 dist/
 .factory-worktrees/
-factory/.pr_draft.md
-factory/.escalation.md
