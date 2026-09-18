@@ -9,25 +9,25 @@ snapshots the output, and diffs them independently.
 If this file starts importing from src/scrubmeta/ for anything other than the
 CLI entry point, something has gone wrong.
 
-Fixture manifest format (tests/fixtures/manifest.json):
-
-    {
-      "fixtures": [
-        {
-          "path": "sample_gps.jpg",
-          "kind": "image",
-          "has_c2pa": false,
-          "lossy_allowed": false,
-          "lossy_reason": null,
-          "expected_stripped_tags": ["GPSLatitude", "GPSLongitude", "SerialNumber"],
-          "skip_if_unimplemented": true
-        }
-      ]
-    }
-
 Usage:
     python -m tests.roundtrip --fixtures tests/fixtures --strict
 """
+
+# _schema: Fixture manifest format (tests/fixtures/manifest.json)
+#
+#     {
+#       "fixtures": [
+#         {
+#           "path": "sample_gps.jpg",
+#           "kind": "image",
+#           "has_c2pa": false,
+#           "lossy_allowed": false,
+#           "lossy_reason": null,
+#           "expected_stripped_tags": ["GPSLatitude", "GPSLongitude", "SerialNumber"],
+#           "skip_if_unimplemented": true
+#         }
+#       ]
+#     }
 
 from __future__ import annotations
 
