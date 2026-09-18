@@ -19,6 +19,15 @@
       "lossy_reason": null,
       "expected_stripped_tags": ["GPSLatitude", "GPSLongitude", "SerialNumber", "Software"],
       "skip_if_unimplemented": false
+    },
+    {
+      "path": "phone_video.mp4",
+      "kind": "video",
+      "has_c2pa": false,
+      "lossy_allowed": false,
+      "lossy_reason": null,
+      "expected_stripped_tags": ["GPSLatitude", "GPSLongitude", "GPSPosition", "GPSCoordinates", "LocationInformation", "format.tags.location", "format.tags.location-eng"],
+      "skip_if_unimplemented": false
     }
   ]
 }
