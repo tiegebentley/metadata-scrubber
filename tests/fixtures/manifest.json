@@ -1,4 +1,5 @@
 {
+  "_schema": "tests/roundtrip.py#_schema",
   "_comment": "Real fixtures land in issues 4-9. Each format PR must add its fixture here.",
   "fixtures": [
     {
