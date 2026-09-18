@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from pathlib import Path
 
 from . import INTENDED_USE_NOTICE
@@ -26,13 +27,13 @@ def record_acknowledgment(path: Path | None = None) -> None:
 
 
 def prompt_for_ack(
-    input_fn: "callable[[str], str]" = input,
-    output_fn: "callable[[str], None]" = print,
+    input_fn: Callable[[str], str] = input,
+    output_fn: Callable[[str], None] = print,
     path: Path | None = None,
 ) -> bool:
     """Prompt the user; return True if they acknowledged."""
     output_fn(INTENDED_USE_NOTICE)
-    output_fn(f'To continue, type exactly: {_ACK_PHRASE}')
+    output_fn(f"To continue, type exactly: {_ACK_PHRASE}")
     answer = input_fn("> ").strip()
     if answer == _ACK_PHRASE:
         record_acknowledgment(path)

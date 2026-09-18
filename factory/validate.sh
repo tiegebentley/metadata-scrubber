@@ -34,13 +34,14 @@ command -v ffprobe  >/dev/null 2>&1 || { echo "ffprobe required"  >&2; exit 1; }
 python3 -m tests.roundtrip --fixtures tests/fixtures --strict
 
 echo "==> Ethical-scope guard"
+# The guard itself lists the banned patterns, so we exclude it from the scan
+# to avoid a false positive. Same for MISSION.md which enumerates them as
+# things NOT to build.
 BANNED_PATTERNS='phash-defeat|photodna-bypass|c2pa-strip|content-id-evade|perceptual-scrub'
-if git ls-files | xargs grep -InE "$BANNED_PATTERNS" 2>/dev/null; then
+EXCLUDE_FILES='^factory/validate\.sh$|^factory/MISSION\.md$|^ISSUES\.md$|^docs/threat-model\.md$'
+files_to_scan=$(git ls-files | grep -vE "$EXCLUDE_FILES" || true)
+if [ -n "$files_to_scan" ] && echo "$files_to_scan" | xargs grep -InE "$BANNED_PATTERNS" 2>/dev/null; then
   echo "Banned pattern found — see MISSION.md ethical scope." >&2
-  exit 1
-fi
-if [ -f pyproject.toml ] && grep -InE "$BANNED_PATTERNS" pyproject.toml; then
-  echo "Banned dependency in pyproject.toml — see MISSION.md ethical scope." >&2
   exit 1
 fi
 

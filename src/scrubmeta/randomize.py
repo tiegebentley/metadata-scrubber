@@ -28,7 +28,7 @@ class TimeWindow:
     end: datetime
 
     @classmethod
-    def past_days(cls, days: int = 30) -> "TimeWindow":
+    def past_days(cls, days: int = 30) -> TimeWindow:
         now = datetime.now(timezone.utc)
         return cls(start=now - timedelta(days=days), end=now)
 
