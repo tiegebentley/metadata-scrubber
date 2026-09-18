@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>scrubmeta - Metadata Scrubber</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+            background: #f5f5f5;
+            padding: 20px;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+
+        .notice {
+            background: #e3f2fd;
+            border-left: 4px solid #2196f3;
+            padding: 12px 16px;
+            margin: 20px 0;
+            font-size: 0.9rem;
+            color: #1565c0;
+        }
+
+        .drop-zone {
+            border: 3px dashed #ccc;
+            border-radius: 8px;
+            padding: 60px 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin: 20px 0;
+        }
+
+        .drop-zone:hover,
+        .drop-zone.drag-over {
+            border-color: #2196f3;
+            background: #f0f7ff;
+        }
+
+        .drop-zone.has-file {
+            border-color: #4caf50;
+            background: #f1f8f4;
+        }
+
+        .file-info {
+            margin: 20px 0;
+            padding: 15px;
+            background: #f9f9f9;
+            border-radius: 5px;
+            display: none;
+        }
+
+        .file-info.visible {
+            display: block;
+        }
+
+        button {
+            background: #2196f3;
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 1rem;
+            transition: background 0.3s ease;
+        }
+
+        button:hover {
+            background: #1976d2;
+        }
+
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        .result {
+            margin-top: 20px;
+            padding: 20px;
+            background: #f1f8f4;
+            border: 1px solid #4caf50;
+            border-radius: 5px;
+        }
+
+        .result h3 {
+            color: #2e7d32;
+            margin-bottom: 10px;
+        }
+
+        .download-link {
+            display: inline-block;
+            margin: 15px 0;
+            padding: 10px 20px;
+            background: #4caf50;
+            color: white;
+            text-decoration: none;
+            border-radius: 5px;
+            transition: background 0.3s ease;
+        }
+
+        .download-link:hover {
+            background: #388e3c;
+        }
+
+        .diff-panel {
+            margin-top: 15px;
+        }
+
+        .diff-toggle {
+            background: #f5f5f5;
+            border: 1px solid #ddd;
+            padding: 10px 15px;
+            cursor: pointer;
+            border-radius: 5px;
+            display: block;
+            width: 100%;
+            text-align: left;
+            font-size: 0.95rem;
+            transition: background 0.2s ease;
+        }
+
+        .diff-toggle:hover {
+            background: #e9e9e9;
+        }
+
+        .diff-content {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s ease;
+            background: #fafafa;
+            border: 1px solid #ddd;
+            border-top: none;
+            border-radius: 0 0 5px 5px;
+        }
+
+        .diff-content.expanded {
+            max-height: 500px;
+            overflow-y: auto;
+            padding: 15px;
+        }
+
+        .diff-content pre {
+            background: white;
+            padding: 10px;
+            border-radius: 3px;
+            overflow-x: auto;
+            font-size: 0.85rem;
+        }
+
+        .error {
+            margin-top: 20px;
+            padding: 15px;
+            background: #ffebee;
+            border: 1px solid #f44336;
+            border-radius: 5px;
+            color: #c62828;
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255,255,255,0.3);
+            border-radius: 50%;
+            border-top-color: white;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .processing {
+            display: none;
+            margin-top: 10px;
+            color: #666;
+        }
+
+        .processing.visible {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>scrubmeta</h1>
+        <p>Strip and randomize metadata from images and videos you own.</p>
+
+        <div class="notice">
+            <strong>Privacy Tool:</strong> This tool is for personal privacy on files you own.
+            It strips GPS, device fingerprints, and other identifying metadata, replacing them with generic values.
+        </div>
+
+        <div class="drop-zone" id="dropZone">
+            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#999" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="17 8 12 3 7 8"></polyline>
+                <line x1="12" y1="3" x2="12" y2="15"></line>
+            </svg>
+            <p><strong>Drop a file here</strong> or click to browse</p>
+            <p style="color: #999; font-size: 0.9rem; margin-top: 5px;">
+                Supported: JPEG, PNG, HEIC, TIFF, MP4, MOV, MKV, WebM (max 500 MB)
+            </p>
+            <input type="file" id="fileInput" style="display: none;">
+        </div>
+
+        <div class="file-info" id="fileInfo">
+            <strong>Selected file:</strong> <span id="fileName"></span><br>
+            <strong>Size:</strong> <span id="fileSize"></span>
+        </div>
+
+        <button id="scrubBtn" disabled>Scrub Metadata</button>
+
+        <div class="processing" id="processing">
+            <div class="spinner"></div> Processing...
+        </div>
+
+        <div id="result"></div>
+    </div>
+
+    <script>
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+        const fileInfo = document.getElementById('fileInfo');
+        const fileName = document.getElementById('fileName');
+        const fileSize = document.getElementById('fileSize');
+        const scrubBtn = document.getElementById('scrubBtn');
+        const processing = document.getElementById('processing');
+        const result = document.getElementById('result');
+
+        let selectedFile = null;
+
+        // Click to browse
+        dropZone.addEventListener('click', () => fileInput.click());
+
+        // File selection via input
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files && e.target.files[0]) {
+                handleFile(e.target.files[0]);
+            }
+        });
+
+        // Drag and drop
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('drag-over');
+        });
+
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('drag-over');
+        });
+
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('drag-over');
+
+            if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                handleFile(e.dataTransfer.files[0]);
+            }
+        });
+
+        function handleFile(file) {
+            selectedFile = file;
+
+            fileName.textContent = file.name;
+            fileSize.textContent = formatBytes(file.size);
+
+            fileInfo.classList.add('visible');
+            dropZone.classList.add('has-file');
+            scrubBtn.disabled = false;
+
+            result.innerHTML = '';
+        }
+
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+        }
+
+        scrubBtn.addEventListener('click', async () => {
+            if (!selectedFile) return;
+
+            scrubBtn.disabled = true;
+            processing.classList.add('visible');
+            result.innerHTML = '';
+
+            try {
+                const formData = new FormData();
+                formData.append('file', selectedFile);
+
+                const response = await fetch('/api/scrub', {
+                    method: 'POST',
+                    body: formData,
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || `HTTP ${response.status}`);
+                }
+
+                const data = await response.json();
+
+                result.innerHTML = `
+                    <div class="result">
+                        <h3>✓ Metadata Scrubbed Successfully</h3>
+                        <a href="${data.download_url}" class="download-link" download>
+                            Download Scrubbed File
+                        </a>
+
+                        <div class="diff-panel">
+                            <button class="diff-toggle" onclick="toggleDiff()">
+                                ▶ What was stripped?
+                            </button>
+                            <div class="diff-content" id="diffContent">
+                                <pre>${JSON.stringify(data.diff, null, 2)}</pre>
+                            </div>
+                        </div>
+                    </div>
+                `;
+
+            } catch (error) {
+                result.innerHTML = `
+                    <div class="error">
+                        <strong>Error:</strong> ${error.message}
+                    </div>
+                `;
+            } finally {
+                processing.classList.remove('visible');
+                scrubBtn.disabled = false;
+            }
+        });
+
+        function toggleDiff() {
+            const diffContent = document.getElementById('diffContent');
+            const toggle = document.querySelector('.diff-toggle');
+
+            if (diffContent.classList.contains('expanded')) {
+                diffContent.classList.remove('expanded');
+                toggle.textContent = '▶ What was stripped?';
+            } else {
+                diffContent.classList.add('expanded');
+                toggle.textContent = '▼ What was stripped?';
+            }
+        }
+    </script>
+</body>
+</html>
