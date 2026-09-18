@@ -56,6 +56,15 @@ STRUCTURAL_TAGS = frozenset({
     "profile", "level", "refs", "is_avc", "nal_length_size",
     "format_name", "format_long_name", "nb_streams", "nb_programs",
     "probe_score", "size",
+    # MP4/QuickTime container brand identifiers (preserved by ffmpeg -c copy)
+    "format.tags.major_brand", "format.tags.minor_version", "format.tags.compatible_brands",
+    "format.tags.encoder",  # ffmpeg automatically adds this
+    # Stream-level structural properties (use pattern matching in verify())
+    # Note: stream indices, codec info, etc. are structural
+    # Stream handler tags (preserved by ffmpeg -c copy as they're structural)
+    "stream0.tags.language", "stream0.tags.handler_name", "stream0.tags.vendor_id",
+    "stream1.tags.language", "stream1.tags.handler_name", "stream1.tags.vendor_id",
+    "stream2.tags.language", "stream2.tags.handler_name", "stream2.tags.vendor_id",
 })
 
 
@@ -218,6 +227,11 @@ def verify(fixture: Fixture) -> tuple[list[Failure], bool]:
     for tag, src_val in src_meta.items():
         if tag in STRUCTURAL_TAGS:
             continue
+        # Stream-level properties (streamN.*) are structural, not metadata
+        if tag.startswith("stream") and "." in tag:
+            parts = tag.split(".", 1)
+            if len(parts) == 2 and parts[0].startswith("stream") and not parts[1].startswith("tags."):
+                continue
         if tag in out_meta and out_meta[tag] == src_val:
             fails.append(Failure(name, f"tag '{tag}' unchanged from source (value: {src_val!r})"))
             break
