@@ -10,6 +10,15 @@
       "lossy_reason": null,
       "expected_stripped_tags": ["Software"],
       "skip_if_unimplemented": true
+    },
+    {
+      "path": "sample_gps.jpg",
+      "kind": "image",
+      "has_c2pa": false,
+      "lossy_allowed": false,
+      "lossy_reason": null,
+      "expected_stripped_tags": ["GPSLatitude", "GPSLongitude", "SerialNumber", "Software"],
+      "skip_if_unimplemented": false
     }
   ]
 }
