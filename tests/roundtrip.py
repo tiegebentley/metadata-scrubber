@@ -47,6 +47,7 @@ STRUCTURAL_TAGS = frozenset({
     "EncodingProcess", "YCbCrSubSampling", "ExifByteOrder",
     "Directory", "FilePermissions", "FileModifyDate", "FileAccessDate",
     "FileInodeChangeDate", "ExifToolVersion", "SourceFile",
+    "ImageSize", "Megapixels",  # exiftool computed fields (Composite group)
     "codec_name", "codec_type", "codec_tag_string", "codec_tag",
     "width", "height", "coded_width", "coded_height", "pix_fmt",
     "sample_fmt", "sample_rate", "channels", "channel_layout",
