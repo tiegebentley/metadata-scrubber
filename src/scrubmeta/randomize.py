@@ -19,6 +19,15 @@ class Identity:
     gps: tuple[float, float] | None = None
     explicit_impersonation: bool = False
 
+    def __post_init__(self) -> None:
+        """Validate GPS coordinates are in valid range."""
+        if self.gps is not None:
+            lat, lon = self.gps
+            if abs(lat) > 90:
+                raise ValueError(f"Latitude out of range: {lat} (must be |lat| <= 90)")
+            if abs(lon) > 180:
+                raise ValueError(f"Longitude out of range: {lon} (must be |lon| <= 180)")
+
 
 @dataclass
 class TimeWindow:
@@ -40,6 +49,31 @@ class Replacement:
     timestamp: datetime
     gps: tuple[float, float] | None = None
     warnings: list[str] = field(default_factory=list)
+
+    def exif_datetime(self) -> str:
+        """Return EXIF-formatted datetime: YYYY:MM:DD HH:MM:SS."""
+        return self.timestamp.strftime("%Y:%m:%d %H:%M:%S")
+
+    def iso8601(self) -> str:
+        """Return ISO 8601 datetime with timezone: YYYY-MM-DDTHH:MM:SS±HH:MM."""
+        return self.timestamp.isoformat()
+
+    def quicktime_datetime(self) -> str:
+        """Return QuickTime UTC datetime: YYYY-MM-DDTHH:MM:SS.000000Z."""
+        # QuickTime expects UTC with microseconds and 'Z' suffix
+        utc_time = self.timestamp.astimezone(timezone.utc)
+        return utc_time.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+    def png_text_chunks(self) -> dict[str, str]:
+        """Return generic PNG text chunk entries (tEXt/iTXt/zTXt).
+
+        Returns deliberately generic, non-identifying values for common PNG text keys.
+        Does NOT include device make/model to avoid device fingerprinting.
+        """
+        return {
+            "Software": "Image Editor",
+            "Comment": "Processed image",
+        }
 
 
 class ImpersonationRefused(ValueError):
