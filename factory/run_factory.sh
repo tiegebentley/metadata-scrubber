@@ -38,6 +38,7 @@ worktree_dir="$WORKTREE_ROOT/issue-${ISSUE_NUMBER}-${slug}"
 
 git fetch origin main
 git worktree remove --force "$worktree_dir" 2>/dev/null || true
+rm -rf "$worktree_dir"  # ensure a clean slate if the remove failed (stale dir from a crash)
 git branch -D "$branch" 2>/dev/null || true
 git worktree add -B "$branch" "$worktree_dir" origin/main
 
