@@ -25,6 +25,9 @@ type Preset = { width: number; height: number; label: string };
 type DupeMatch = { a: string; b: string; similarity: number; kind: "exact" | "near" };
 type HistoryItem = { id: string; tool: string; name: string; size: number; completedAt: string; output: string };
 
+// Browser talks to the API directly so uploads are not capped or timed out by the Next.js proxy.
+// NEXT_PUBLIC_SCRUBMETA_API is inlined at build time; unset, the /backend rewrite is used (dev).
+const API = process.env.NEXT_PUBLIC_SCRUBMETA_API || "/backend";
 const MAX = 500 * 1024 * 1024;
 const ACCEPT = ".jpg,.jpeg,.tif,.tiff,.png,.webp,.heic,.mp4,.mov,.m4v,.mkv,.webm,.gif";
 const ACCEPT_IMAGES = ".jpg,.jpeg,.png,.webp,.tif,.tiff,.gif";
@@ -42,7 +45,7 @@ const tools: { id: Tool; label: string; icon: typeof ShieldCheck }[] = [
 /* ---------- API helper ---------- */
 
 async function api<T>(path: string, body: FormData, headers: Record<string, string> = {}): Promise<T> {
-  const r = await fetch(`/backend${path}`, { method: "POST", body, headers });
+  const r = await fetch(`${API}${path}`, { method: "POST", body, headers });
   const text = await r.text();
   let json: any = null;
   try { json = JSON.parse(text); } catch { /* non-JSON error body */ }
@@ -76,7 +79,7 @@ export default function Home() {
 
   async function ping() {
     setHealth("checking");
-    try { setHealth((await fetch("/backend/healthz", { cache: "no-store" })).ok ? "online" : "offline"); }
+    try { setHealth((await fetch(`${API}/healthz`, { cache: "no-store" })).ok ? "online" : "offline"); }
     catch { setHealth("offline"); }
   }
 
@@ -373,7 +376,7 @@ function Repurpose(p: ToolProps) {
   const [savedReviewers, setSavedReviewers] = useState<string[]>([]);
   const [selectedReviewers, setSelectedReviewers] = useState<string[]>([]);
 
-  useEffect(() => { fetch("/backend/api/export-presets").then((r) => r.json()).then(setPresets).catch(() => setPresets({})); }, []);
+  useEffect(() => { fetch(`${API}/api/export-presets`).then((r) => r.json()).then(setPresets).catch(() => setPresets({})); }, []);
 
   useEffect(() => {
     try {
@@ -515,7 +518,7 @@ function Repurpose(p: ToolProps) {
         <div className="panel">
           <h3>{result.count} outputs generated</h3>
           <div className="fileChips">{result.outputs.map((name, i) => <span key={i}>{name}</span>)}</div>
-          <a href={`/backend${result.download_url}`} className="textButton"><Download />Download ZIP</a>
+          <a href={`${API}${result.download_url}`} className="textButton"><Download />Download ZIP</a>
         </div>
       )}
       {error && <div className="error">{error}</div>}
@@ -652,7 +655,7 @@ function Ownership({ owned, setOwned }: { owned: boolean; setOwned: (v: boolean)
   return <label className="ownership"><input id="ownership" type="checkbox" checked={owned} onChange={(e) => setOwned(e.target.checked)} /><span><b>I own or am authorized to process this content</b><small>Required before any operation runs.</small></span></label>;
 }
 function ResultBar({ title, sub, href }: { title: string; sub: string; href: string }) {
-  return <div className="resultBar"><Check /><div><b>{title}</b><span>{sub}</span></div><a href={`/backend${href}`}><Download />Download</a></div>;
+  return <div className="resultBar"><Check /><div><b>{title}</b><span>{sub}</span></div><a href={`${API}${href}`}><Download />Download</a></div>;
 }
 function Action({ disabled, busy, onClick, children }: { disabled?: boolean; busy?: boolean; onClick?: () => void; children: ReactNode }) {
   return <><div className="divider" /><button className="start" disabled={disabled} onClick={onClick}>{busy ? <><RefreshCw className="spin" />Processing…</> : children}</button></>;

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import ipaddress
+import os
 import secrets
 import sys
 import tempfile
@@ -12,6 +13,7 @@ from typing import Any, Literal
 
 import uvicorn
 from fastapi import FastAPI, File, Header, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -41,6 +43,16 @@ def create_app() -> FastAPI:
         title="scrubmeta",
         version=__version__,
         description=INTENDED_USE_NOTICE,
+    )
+
+    # Allow the Next.js UI (a different port, so a different origin) to call the API
+    # directly. Origins come from SCRUBMETA_CORS_ORIGINS (comma-separated); default
+    # covers local dev. No wildcard: this service has no auth of its own.
+    origins = [o.strip() for o in os.environ.get(
+        "SCRUBMETA_CORS_ORIGINS", "http://127.0.0.1:3000,http://localhost:3000"
+    ).split(",") if o.strip()]
+    app.add_middleware(
+        CORSMiddleware, allow_origins=origins, allow_methods=["GET", "POST"], allow_headers=["*"]
     )
 
     # Serve static HTML from src/scrubmeta/static/
