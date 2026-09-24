@@ -283,6 +283,91 @@ def test_repurpose_review_copies_includes_visible_stamp(client: TestClient, tmp_
         assert diff > 1000, "Stamp should be visible on the frame"
 
 
+@needs_ffmpeg
+def test_repurpose_review_copies_compact_corner_badge(client: TestClient, tmp_path: Path) -> None:
+    """Test that review badges are compact and corner-anchored with 2 handles."""
+    r = client.post(
+        "/api/repurpose",
+        files={"file": _mp4()},
+        data={
+            "mode": "review_copies",
+            "recipients": "@alicechen\n@bobsmith",
+            "corner": "tl",
+            "size_pct": "3",
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["count"] == 2
+
+    # Download zip and extract frame from first output
+    d = client.get(body["download_url"])
+    assert d.status_code == 200
+
+    import zipfile
+    from io import BytesIO
+
+    from PIL import Image
+
+    from scrubmeta.media_tools import extract_frame
+
+    zip_data = BytesIO(d.content)
+    with zipfile.ZipFile(zip_data, "r") as zf:
+        assert len(zf.namelist()) == 2
+
+        # Extract frame from first video and source video
+        first_video_path = tmp_path / zf.namelist()[0]
+        first_video_path.write_bytes(zf.read(zf.namelist()[0]))
+
+        stamped_frame_path = tmp_path / "stamped.jpg"
+        source_frame_path = tmp_path / "source.jpg"
+
+        extract_frame(first_video_path, stamped_frame_path, 0.5)
+        extract_frame(FIXTURE_MP4, source_frame_path, 0.5)
+
+        stamped = Image.open(stamped_frame_path).convert("RGB")
+        source = Image.open(source_frame_path).convert("RGB")
+
+        # Resize source to match if needed
+        if stamped.size != source.size:
+            source = source.resize(stamped.size)
+
+        frame_width, frame_height = stamped.size
+
+        # Check that badge is present in top-left corner by examining pixel differences
+        # Sample the top-left corner area (first 15% of width and height)
+        corner_width = int(frame_width * 0.15)
+        corner_height = int(frame_height * 0.15)
+
+        stamped_corner = stamped.crop((0, 0, corner_width, corner_height))
+        source_corner = source.crop((0, 0, corner_width, corner_height))
+
+        import numpy as np
+        stamped_arr = np.array(stamped_corner)
+        source_arr = np.array(source_corner)
+
+        # Calculate difference in corner
+        corner_diff = np.abs(stamped_arr.astype(int) - source_arr.astype(int)).sum()
+
+        # There should be significant difference in the corner (badge present)
+        assert corner_diff > 10000, f"Badge should be visible in corner, diff: {corner_diff}"
+
+        # The rest of the frame (outside top-left corner) should be mostly unchanged
+        # Sample bottom-right corner as control
+        control_x = int(frame_width * 0.8)
+        control_y = int(frame_height * 0.8)
+        stamped_control = stamped.crop((control_x, control_y, frame_width, frame_height))
+        source_control = source.crop((control_x, control_y, frame_width, frame_height))
+
+        stamped_control_arr = np.array(stamped_control)
+        source_control_arr = np.array(source_control)
+        control_diff = np.abs(stamped_control_arr.astype(int) - source_control_arr.astype(int)).sum()
+
+        # Control area should have much smaller difference than corner
+        # (some difference is OK due to re-encoding artifacts)
+        assert corner_diff > control_diff * 2, f"Badge should be localized to corner: corner_diff={corner_diff}, control_diff={control_diff}"
+
+
 def test_repurpose_enforces_caps(client: TestClient) -> None:
     # Test caption cap
     r = client.post(
@@ -299,3 +384,51 @@ def test_repurpose_enforces_caps(client: TestClient) -> None:
         data={"mode": "review_copies", "recipients": "\n".join(f"Recipient {i}" for i in range(26))},
     )
     assert r.status_code == 400
+
+
+@needs_ffmpeg
+def test_repurpose_review_badge_is_confined_to_one_corner(client: TestClient, tmp_path: Path) -> None:
+    """Two review copies must differ only inside a small corner region.
+
+    Diffing two stamped outputs (rather than output vs source) isolates the
+    badge from re-encode noise. This is the guarantee that keeps review copies
+    a screener tool: the stamp is visible, but it never spreads across the
+    frame or shrinks below the floor.
+    """
+    import io
+    import zipfile
+
+    from PIL import Image, ImageChops
+
+    from scrubmeta.media_tools import extract_frame
+
+    r = client.post(
+        "/api/repurpose",
+        files={"file": _mp4()},
+        data={"mode": "review_copies", "recipients": "@alicechen\n@bob_ortiz", "corner": "br", "size_pct": "1"},
+    )
+    assert r.status_code == 200
+    d = client.get(r.json()["download_url"])
+    assert d.status_code == 200
+
+    frames: list[Image.Image] = []
+    with zipfile.ZipFile(io.BytesIO(d.content)) as zf:
+        names = sorted(zf.namelist())
+        assert names == ["review-alicechen.mp4", "review-bob_ortiz.mp4"]
+        for name in names:
+            video = tmp_path / name
+            video.write_bytes(zf.read(name))
+            frame = tmp_path / f"{name}.png"
+            extract_frame(video, frame, 0.5)
+            frames.append(Image.open(frame).convert("RGB"))
+
+    a, b = frames
+    w, h = a.size
+    mask = ImageChops.difference(a, b).convert("L").point(lambda p: 255 if p > 40 else 0)
+    bbox = mask.getbbox()
+    assert bbox is not None, "stamps must differ between recipients"
+    x0, y0, x1, y1 = bbox
+    assert (x1 - x0) / w <= 0.45, "badge spreads too far horizontally"
+    assert (y1 - y0) / h <= 0.12, "badge spreads too far vertically"
+    assert (y1 - y0) / h >= 0.025, "badge shrank below the visibility floor"
+    assert x1 > w * 0.75 and y0 > h * 0.75, "badge is not in the requested bottom-right corner"

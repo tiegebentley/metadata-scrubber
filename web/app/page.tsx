@@ -370,13 +370,37 @@ function Repurpose(p: ToolProps) {
   const srtPicker = useRef<HTMLInputElement>(null);
   const { busy, error, result, run, reset } = useRun<{ download_url: string; outputs: string[]; count: number }>();
 
+  const [savedReviewers, setSavedReviewers] = useState<string[]>([]);
+  const [selectedReviewers, setSelectedReviewers] = useState<string[]>([]);
+
   useEffect(() => { fetch("/backend/api/export-presets").then((r) => r.json()).then(setPresets).catch(() => setPresets({})); }, []);
 
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem("scrubmeta-reviewers") || "";
+      const handles = stored.split("\n").filter((l) => l.trim());
+      setSavedReviewers(handles);
+    } catch { /* ignore */ }
+  }, [mode]);
+
   const captionCount = captions.split("\n").filter((l) => l.trim()).length;
-  const recipientCount = recipients.split("\n").filter((l) => l.trim()).length;
+  const adHocRecipients = recipients.split("\n").filter((l) => l.trim());
+  const recipientCount = selectedReviewers.length + adHocRecipients.length;
 
   function togglePreset(id: string) {
     setSelectedPresets((prev) => prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id]);
+  }
+
+  function toggleReviewer(handle: string) {
+    setSelectedReviewers((prev) => prev.includes(handle) ? prev.filter((h) => h !== handle) : [...prev, handle]);
+  }
+
+  function selectAllReviewers() {
+    setSelectedReviewers([...savedReviewers]);
+  }
+
+  function clearReviewers() {
+    setSelectedReviewers([]);
   }
 
   async function go() {
@@ -396,7 +420,9 @@ function Repurpose(p: ToolProps) {
     } else if (mode === "subtitle_localization") {
       srtFiles.forEach((srt) => body.append("srt_files", srt));
     } else if (mode === "review_copies") {
-      body.append("recipients", recipients);
+      // Combine selected chips + ad-hoc textarea entries
+      const allRecipients = [...selectedReviewers, ...adHocRecipients];
+      body.append("recipients", allRecipients.join("\n"));
       body.append("corner", corner);
       body.append("size_pct", String(size));
     }
@@ -454,7 +480,27 @@ function Repurpose(p: ToolProps) {
             {mode === "review_copies" && (
               <>
                 <ControlTitle title="Recipients" />
-                <label className="field"><span>Recipient names (one per line, max 25)</span><textarea value={recipients} onChange={(e) => setRecipients(e.target.value)} rows={5} placeholder="Alice Johnson&#10;Bob Smith&#10;Carol Williams" /></label>
+                {savedReviewers.length > 0 ? (
+                  <>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+                      <small style={{ opacity: 0.7 }}>Saved reviewers</small>
+                      <div style={{ display: "flex", gap: "8px" }}>
+                        <button className="textButton" onClick={selectAllReviewers} style={{ fontSize: "13px", padding: "4px 8px" }}>Select all</button>
+                        <button className="textButton" onClick={clearReviewers} style={{ fontSize: "13px", padding: "4px 8px" }}>Clear</button>
+                      </div>
+                    </div>
+                    <div className="fileChips" style={{ marginBottom: "12px" }}>
+                      {savedReviewers.map((handle) => (
+                        <button key={handle} onClick={() => toggleReviewer(handle)} className={selectedReviewers.includes(handle) ? "chip active" : "chip"} style={{ cursor: "pointer", background: selectedReviewers.includes(handle) ? "#2563eb" : "#374151", color: "white", border: "none", padding: "6px 12px", borderRadius: "6px" }}>
+                          {handle}
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <p className="muted" style={{ fontSize: "13px", marginBottom: "12px" }}>No saved reviewers. <a href="#" onClick={(e) => { e.preventDefault(); /* user needs to navigate to Settings manually */ }} style={{ color: "#3b82f6" }}>Add handles in Settings</a>.</p>
+                )}
+                <label className="field"><span>Additional recipients (one per line)</span><textarea value={recipients} onChange={(e) => setRecipients(e.target.value)} rows={5} placeholder="@alicechen&#10;@bobsmith" /></label>
                 <Row label="Count" value={`${recipientCount} / 25`} />
                 <label className="field"><span>Stamp corner</span><select value={corner} onChange={(e) => setCorner(e.target.value as any)}><option value="tl">Top left</option><option value="tr">Top right</option><option value="bl">Bottom left</option><option value="br">Bottom right</option></select></label>
                 <Range label="Size (%)" value={size} onChange={setSize} min={2} max={10} />
@@ -531,6 +577,26 @@ function HistoryView({ items, clear }: { items: HistoryItem[]; clear: () => void
 }
 
 function SettingsView({ health, ping }: { health: Health; ping: () => void }) {
+  const [reviewers, setReviewers] = useState("");
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem("scrubmeta-reviewers") || "";
+      setReviewers(stored);
+    } catch { /* ignore */ }
+  }, []);
+
+  function saveReviewers() {
+    try {
+      localStorage.setItem("scrubmeta-reviewers", reviewers);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch { /* ignore */ }
+  }
+
+  const reviewerCount = reviewers.split("\n").filter((l) => l.trim()).length;
+
   return (
     <ToolPage tabs={["Settings"]} active={0}>
       <div className="centerTitle"><h1>Settings</h1><p>Local processor status and the safeguards this tool runs under.</p></div>
@@ -539,6 +605,12 @@ function SettingsView({ health, ping }: { health: Health; ping: () => void }) {
         <Setting icon={Lock} title="Privacy" text="No analytics, cloud library, or telemetry. Every operation runs on the local processor and downloads are one-time." />
         <Setting icon={ShieldCheck} title="Provenance" text="C2PA content credentials are preserved by default. Stripping them requires explicit ownership flags at the CLI." />
         <Setting icon={Info} title="Scope" text="Personal privacy on files you own. Not a tool for evading moderation, provenance, or copyright systems. See factory/MISSION.md." />
+      </div>
+      <div className="panel">
+        <h3>Reviewer handles</h3>
+        <label className="field"><span>Saved reviewer handles (one per line)</span><textarea value={reviewers} onChange={(e) => setReviewers(e.target.value)} rows={8} placeholder="@alicechen&#10;@bobsmith&#10;@caroldavis" /></label>
+        <Row label="Count" value={`${reviewerCount} saved`} />
+        <button className="textButton" onClick={saveReviewers}>{saved ? <><Check />Saved</> : "Save handles"}</button>
       </div>
       <Action onClick={ping}>Recheck processor</Action>
     </ToolPage>
