@@ -115,18 +115,20 @@ def test_subtitle_variants_enforces_cap(tmp_path: Path, src: Path) -> None:
 
 
 def test_review_copies_includes_recipient_name_and_date(tmp_path: Path, src: Path, mock_run: MagicMock) -> None:
-    """Review copies should include recipient name, date, and warning in stamp."""
-    outputs = review_copies(src, tmp_path, ["Alice Johnson"], "tl")
+    """Review copies should include recipient handle and REVIEW · date in compact two-line stamp."""
+    outputs = review_copies(src, tmp_path, ["@alicechen"], "tl")
     assert len(outputs) == 1
-    assert "Alice-Johnson" in outputs[0].name
+    # Filename should strip leading @ before sanitizing
+    assert outputs[0].name == "review-alicechen.mp4"
 
     # Check drawtext filter contains required elements
     call_args = mock_run.call_args[0][0]
     filter_arg = next((arg for i, arg in enumerate(call_args) if call_args[i - 1] == "-vf"), None)
     assert filter_arg is not None
-    assert "REVIEW COPY" in filter_arg
-    assert "Alice Johnson" in filter_arg
-    assert "Do not distribute" in filter_arg
+    # Should contain recipient handle and REVIEW ·, but NOT "Do not distribute"
+    assert "@alicechen" in filter_arg
+    assert "REVIEW ·" in filter_arg or "REVIEW \u00b7" in filter_arg  # Accept either · or unicode
+    assert "Do not distribute" not in filter_arg
 
 
 def test_review_copies_enforces_visibility_floor(tmp_path: Path, src: Path, mock_run: MagicMock) -> None:
@@ -146,13 +148,14 @@ def test_review_copies_enforces_visibility_floor(tmp_path: Path, src: Path, mock
 
 
 def test_review_copies_positions_stamp_in_corners(tmp_path: Path, src: Path, mock_run: MagicMock) -> None:
-    """Review copies should position stamp in the specified corner."""
+    """Review copies should position stamp in the specified corner with padding."""
     corners = ["tl", "tr", "bl", "br"]
-    expected_positions = {
-        "tl": ("x=10", "y=10"),
-        "tr": ("x=w-text_w-10", "y=10"),
-        "bl": ("x=10", "y=h-text_h-10"),
-        "br": ("x=w-text_w-10", "y=h-text_h-10"),
+    # New positioning uses 20px padding (approximates 2% for common resolutions)
+    expected_patterns = {
+        "tl": ("x=20", "y=20"),
+        "tr": ("x=w-text_w-20", "y=20"),
+        "bl": ("x=20", "y=h-text_h-20"),
+        "br": ("x=w-text_w-20", "y=h-text_h-20"),
     }
 
     for corner in corners:
@@ -163,9 +166,16 @@ def test_review_copies_positions_stamp_in_corners(tmp_path: Path, src: Path, moc
         filter_arg = next((arg for i, arg in enumerate(call_args) if call_args[i - 1] == "-vf"), None)
         assert filter_arg is not None
 
-        x_expected, y_expected = expected_positions[corner]
-        assert x_expected in filter_arg
-        assert y_expected in filter_arg
+        x_expected, y_expected = expected_patterns[corner]
+        # Check that first line (line 1) has the expected x position
+        assert x_expected in filter_arg, f"Expected {x_expected} in filter for corner {corner}"
+        # Y position varies between line 1 and line 2, just verify corner-appropriate positioning exists
+        if corner in ("tl", "tr"):
+            # Top corners: y should start at 20
+            assert "y=20" in filter_arg or "y=h*0." in filter_arg
+        else:
+            # Bottom corners: y should be relative to h-text_h
+            assert "y=h-text_h-20" in filter_arg or "y=h-text_h" in filter_arg
 
 
 def test_review_copies_enforces_cap(tmp_path: Path, src: Path) -> None:
@@ -175,9 +185,15 @@ def test_review_copies_enforces_cap(tmp_path: Path, src: Path) -> None:
 
 
 def test_review_copies_sanitizes_recipient_names_for_filenames(tmp_path: Path, src: Path, mock_run: MagicMock) -> None:
-    """Review copies should sanitize recipient names for safe filenames."""
+    """Review copies should sanitize recipient names for safe filenames and strip leading @."""
+    # Test with leading @ - should be stripped before sanitization
+    outputs = review_copies(src, tmp_path, ["@alicechen"], "tl")
+    assert len(outputs) == 1
+    assert outputs[0].name == "review-alicechen.mp4"
+
+    # Test without @ and with special chars - should sanitize normally
+    mock_run.reset_mock()
     outputs = review_copies(src, tmp_path, ["John Doe / Test <User>"], "tl")
-    # Special chars should be replaced with underscores or dashes
     assert len(outputs) == 1
     assert "review-" in outputs[0].name
     # Should not contain special chars in filename
