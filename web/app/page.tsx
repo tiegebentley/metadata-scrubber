@@ -44,19 +44,77 @@ const tools: { id: Tool; label: string; icon: typeof ShieldCheck }[] = [
 
 /* ---------- API helper ---------- */
 
-async function api<T>(path: string, body: FormData, headers: Record<string, string> = {}): Promise<T> {
-  const r = await fetch(`${API}${path}`, { method: "POST", body, headers });
-  const text = await r.text();
-  let json: any = null;
-  try { json = JSON.parse(text); } catch { /* non-JSON error body */ }
-  if (!r.ok) {
-    const detail = json?.detail ?? text ?? "Request failed";
-    throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
-  }
-  return json as T;
+/** Progress reported to the caller while an upload is in flight. */
+type Progress = { phase: "uploading" | "processing"; pct: number };
+let onProgress: ((p: Progress | null) => void) | null = null;
+
+class UploadError extends Error {
+  constructor(message: string, public readonly retryable: boolean) { super(message); }
 }
 
-// crypto.randomUUID is only defined in secure contexts (https / localhost). The UI is
+/** Chrome on Android can lose access to a picked file (the OS revokes the handle
+ *  after a while, or when the providing app is killed). fetch() then fails
+ *  mid-stream with a bare "Failed to fetch". Reading a slice from each end up
+ *  front turns that into a clear, actionable error before any bytes are sent. */
+async function assertReadable(body: FormData): Promise<void> {
+  for (const v of body.values()) {
+    if (!(v instanceof Blob)) continue;
+    try {
+      await v.slice(0, Math.min(65536, v.size)).arrayBuffer();
+      if (v.size > 65536) await v.slice(v.size - 65536).arrayBuffer();
+    } catch {
+      throw new UploadError(
+        "The selected file can't be read anymore (Android revokes file access after a while). " +
+        "Remove it, pick it again, and retry.", false);
+    }
+  }
+}
+
+function xhrUpload<T>(url: string, body: FormData, headers: Record<string, string>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const x = new XMLHttpRequest();
+    x.open("POST", url);
+    for (const [k, v] of Object.entries(headers)) x.setRequestHeader(k, v);
+    x.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress?.({ phase: "uploading", pct: Math.round((100 * e.loaded) / e.total) });
+    };
+    x.upload.onload = () => onProgress?.({ phase: "processing", pct: 100 });
+    x.onerror = () => reject(new UploadError(
+      "The upload didn't reach the server. Check that Tailscale is connected on this device, then try again.", true));
+    x.onabort = () => reject(new UploadError("Upload cancelled.", false));
+    x.ontimeout = () => reject(new UploadError("The server took too long to respond.", true));
+    x.onload = () => {
+      let json: any = null;
+      try { json = JSON.parse(x.responseText); } catch { /* non-JSON body */ }
+      if (x.status >= 200 && x.status < 300) return resolve(json as T);
+      const detail = json?.detail ?? x.responseText ?? `HTTP ${x.status}`;
+      reject(new UploadError(typeof detail === "string" ? detail : JSON.stringify(detail), false));
+    };
+    x.send(body);
+  });
+}
+
+async function api<T>(path: string, body: FormData, headers: Record<string, string> = {}): Promise<T> {
+  await assertReadable(body);
+  // Retry transient network drops with backoff. Chrome aborts in-flight requests
+  // with ERR_NETWORK_CHANGED whenever an interface or route changes (VPN
+  // re-establishing, Wi-Fi <-> cellular handoff), so one attempt is not enough
+  // on a phone. Server-side errors (4xx/5xx) and unreadable files never retry.
+  const delays = [1500, 3000, 5000];
+  try {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await xhrUpload<T>(`${API}${path}`, body, headers);
+      } catch (e) {
+        if (!(e instanceof UploadError) || !e.retryable || attempt >= delays.length) throw e;
+        onProgress?.({ phase: "uploading", pct: 0 });
+        await new Promise((r) => setTimeout(r, delays[attempt]));
+      }
+    }
+  } finally {
+    onProgress?.(null);
+  }
+}// crypto.randomUUID is only defined in secure contexts (https / localhost). The UI is
 // served over plain http on the tailnet, so fall back to a timestamp + random id.
 function newId(): string {
   try { if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID(); } catch { /* fall through */ }
@@ -158,18 +216,19 @@ function useRun<T>() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState<T | null>(null);
+  const [progress, setProgress] = useState<Progress | null>(null);
   async function run(fn: () => Promise<T>) {
     setBusy(true); setError(""); setResult(null);
+    onProgress = setProgress;
     try { setResult(await fn()); } catch (e) { setError(e instanceof Error ? e.message : "Request failed"); }
-    finally { setBusy(false); }
+    finally { setBusy(false); setProgress(null); onProgress = null; }
   }
-  return { busy, error, result, run, reset: () => { setResult(null); setError(""); } };
+  return { busy, error, result, progress, run, reset: () => { setResult(null); setError(""); } };
 }
-
 /* ---------- tools ---------- */
 
 function Scrub(p: ToolProps) {
-  const { busy, error, result, run } = useRun<ScrubResult>();
+  const { busy, error, result, progress, run } = useRun<ScrubResult>();
   async function go() {
     if (!p.file) return;
     const body = new FormData(); body.append("file", p.file);
@@ -195,13 +254,13 @@ function Scrub(p: ToolProps) {
       )}
       {result && <ResultBar title="Scrub complete" sub={`${result.diff.scrubbed_file} · GPS removed · ${result.diff.replacement_metadata.make} / ${result.diff.replacement_metadata.model}`} href={result.download_url} />}
       {error && <div className="error">{error}</div>}
-      <Action disabled={!p.file || !p.owned || busy} busy={busy} onClick={go}>Start scrub</Action>
+      <Action progress={progress} disabled={!p.file || !p.owned || busy} busy={busy} onClick={go}>Start scrub</Action>
     </ToolPage>
   );
 }
 
 function Inspect(p: ToolProps) {
-  const { busy, error, result, run } = useRun<Inspection>();
+  const { busy, error, result, progress, run } = useRun<Inspection>();
   async function go() {
     if (!p.file) return;
     const body = new FormData(); body.append("file", p.file);
@@ -219,7 +278,7 @@ function Inspect(p: ToolProps) {
       )}
       {result && <InspectionView data={result} />}
       {error && <div className="error">{error}</div>}
-      <Action disabled={!p.file || !p.owned || busy} busy={busy} onClick={go}>Inspect embedded metadata</Action>
+      <Action progress={progress} disabled={!p.file || !p.owned || busy} busy={busy} onClick={go}>Inspect embedded metadata</Action>
     </ToolPage>
   );
 }
@@ -253,7 +312,7 @@ function Convert(p: ToolProps) {
   const [width, setWidth] = useState("");
   const [height, setHeight] = useState("");
   const targets = ["gif", "mp4", "jpg"] as const;
-  const { busy, error, result, run } = useRun<DownloadResult>();
+  const { busy, error, result, progress, run } = useRun<DownloadResult>();
   async function go() {
     if (!p.file) return;
     const body = new FormData(); body.append("file", p.file); body.append("target", targets[tab]); body.append("quality", String(quality));
@@ -281,7 +340,7 @@ function Convert(p: ToolProps) {
       )}
       {result && <ResultBar title="Conversion complete" sub={`${result.output_file}${result.inspection?.duration ? ` · ${secs(result.inspection.duration)}` : ""}`} href={result.download_url} />}
       {error && <div className="error">{error}</div>}
-      <Action disabled={!p.file || !p.owned || busy} busy={busy} onClick={go}>Start conversion</Action>
+      <Action progress={progress} disabled={!p.file || !p.owned || busy} busy={busy} onClick={go}>Start conversion</Action>
     </ToolPage>
   );
 }
@@ -291,7 +350,7 @@ function Editor(p: ToolProps) {
   const [end, setEnd] = useState("");
   const [quality, setQuality] = useState(90);
   const [speed, setSpeed] = useState(100);
-  const { busy, error, result, run } = useRun<DownloadResult>();
+  const { busy, error, result, progress, run } = useRun<DownloadResult>();
   async function go() {
     if (!p.file) return;
     const body = new FormData(); body.append("file", p.file); body.append("start", start || "0");
@@ -319,7 +378,7 @@ function Editor(p: ToolProps) {
       )}
       {result && <ResultBar title="Export complete" sub={`${result.output_file} · ${secs(result.inspection?.duration)}`} href={result.download_url} />}
       {error && <div className="error">{error}</div>}
-      <Action disabled={!p.file || !p.owned || busy} busy={busy} onClick={go}>Start export</Action>
+      <Action progress={progress} disabled={!p.file || !p.owned || busy} busy={busy} onClick={go}>Start export</Action>
     </ToolPage>
   );
 }
@@ -329,7 +388,7 @@ function Generator(p: ToolProps) {
   const [start, setStart] = useState("0");
   const [duration, setDuration] = useState("10");
   const [at, setAt] = useState("0");
-  const { busy, error, result, run, reset } = useRun<DownloadResult>();
+  const { busy, error, result, progress, run, reset } = useRun<DownloadResult>();
   async function go() {
     if (!p.file) return;
     const body = new FormData(); body.append("file", p.file);
@@ -359,7 +418,7 @@ function Generator(p: ToolProps) {
       )}
       {result && <ResultBar title={tab === 0 ? "Clip ready" : "Frame ready"} sub={result.output_file} href={result.download_url} />}
       {error && <div className="error">{error}</div>}
-      <Action disabled={!p.file || !p.owned || busy} busy={busy} onClick={go}>Start</Action>
+      <Action progress={progress} disabled={!p.file || !p.owned || busy} busy={busy} onClick={go}>Start</Action>
     </ToolPage>
   );
 }
@@ -377,7 +436,7 @@ function Repurpose(p: ToolProps) {
   const [color, setColor] = useState("white");
   const [srtFiles, setSrtFiles] = useState<File[]>([]);
   const srtPicker = useRef<HTMLInputElement>(null);
-  const { busy, error, result, run, reset } = useRun<{ download_url: string; outputs: string[]; count: number }>();
+  const { busy, error, result, progress, run, reset } = useRun<{ download_url: string; outputs: string[]; count: number }>();
 
   const [savedReviewers, setSavedReviewers] = useState<string[]>([]);
   const [selectedReviewers, setSelectedReviewers] = useState<string[]>([]);
@@ -528,14 +587,14 @@ function Repurpose(p: ToolProps) {
         </div>
       )}
       {error && <div className="error">{error}</div>}
-      <Action disabled={!p.file || !p.owned || busy || (mode === "format_matrix" && selectedPresets.length === 0) || (mode === "caption_variants" && captionCount === 0) || (mode === "subtitle_localization" && srtFiles.length === 0) || (mode === "review_copies" && recipientCount === 0)} busy={busy} onClick={go}>Generate outputs</Action>
+      <Action progress={progress} disabled={!p.file || !p.owned || busy || (mode === "format_matrix" && selectedPresets.length === 0) || (mode === "caption_variants" && captionCount === 0) || (mode === "subtitle_localization" && srtFiles.length === 0) || (mode === "review_copies" && recipientCount === 0)} busy={busy} onClick={go}>Generate outputs</Action>
     </ToolPage>
   );
 }
 
 function Duplicates(p: { files: File[]; owned: boolean; setOwned: (v: boolean) => void; choose: () => void; clear: () => void; drop: (e: DragEvent<HTMLElement>) => void; record: ToolProps["record"] }) {
   const [threshold, setThreshold] = useState(90);
-  const { busy, error, result, run } = useRun<{ threshold: number; files_scanned: number; matches: DupeMatch[] }>();
+  const { busy, error, result, progress, run } = useRun<{ threshold: number; files_scanned: number; matches: DupeMatch[] }>();
   const total = p.files.reduce((n, f) => n + f.size, 0);
   async function go() {
     if (!p.files.length) return;
@@ -566,7 +625,7 @@ function Duplicates(p: { files: File[]; owned: boolean; setOwned: (v: boolean) =
         </div>
       )}
       {error && <div className="error">{error}</div>}
-      <Action disabled={p.files.length < 2 || !p.owned || busy} busy={busy} onClick={go}>Scan for duplicates</Action>
+      <Action progress={progress} disabled={p.files.length < 2 || !p.owned || busy} busy={busy} onClick={go}>Scan for duplicates</Action>
     </ToolPage>
   );
 }
@@ -663,10 +722,12 @@ function Ownership({ owned, setOwned }: { owned: boolean; setOwned: (v: boolean)
 function ResultBar({ title, sub, href }: { title: string; sub: string; href: string }) {
   return <div className="resultBar"><Check /><div><b>{title}</b><span>{sub}</span></div><a href={`${API}${href}`}><Download />Download</a></div>;
 }
-function Action({ disabled, busy, onClick, children }: { disabled?: boolean; busy?: boolean; onClick?: () => void; children: ReactNode }) {
-  return <><div className="divider" /><button className="start" disabled={disabled} onClick={onClick}>{busy ? <><RefreshCw className="spin" />Processing…</> : children}</button></>;
-}
-function Setting({ icon: Icon, title, text }: { icon: typeof ShieldCheck; title: string; text: string }) {
+function Action({ disabled, busy, progress, onClick, children }: { disabled?: boolean; busy?: boolean; progress?: Progress | null; onClick?: () => void; children: ReactNode }) {
+  const label = !busy ? children
+    : progress?.phase === "uploading" ? `Uploading ${progress.pct}%…`
+    : "Processing…";
+  return <><div className="divider" /><button className="start" disabled={disabled} onClick={onClick}>{busy ? <><RefreshCw className="spin" />{label}</> : label}</button></>;
+}function Setting({ icon: Icon, title, text }: { icon: typeof ShieldCheck; title: string; text: string }) {
   return <div className="setting"><Icon /><div><b>{title}</b><span>{text}</span></div></div>;
 }
 function Empty({ text }: { text: string }) { return <div className="empty"><ScanSearch /><b>{text}</b></div>; }
