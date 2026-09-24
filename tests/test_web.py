@@ -310,3 +310,126 @@ def test_download_invalid_token(client: TestClient) -> None:
     response = client.get("/download/invalid-token-12345")
     assert response.status_code == 404
     assert "not found" in response.json()["detail"].lower()
+
+
+def test_scrub_includes_verification_report(
+    client: TestClient, sample_jpeg: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test that /api/scrub returns a verification report in the response."""
+    # Mock ack to be present
+    ack_file = tmp_path / "ack"
+    ack_file.write_text("acknowledged\n")
+
+    from scrubmeta import ack
+
+    monkeypatch.setattr(ack, "ack_path", lambda: ack_file)
+
+    with sample_jpeg.open("rb") as f:
+        response = client.post(
+            "/api/scrub",
+            files={"file": ("test.jpg", f, "image/jpeg")},
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+
+    # Check that the response includes a report field
+    assert "report" in data
+    report = data["report"]
+
+    # Verify report structure
+    assert "pixel_identical" in report
+    assert "stream_hash_algo" in report
+    assert "metadata_removed" in report
+    assert "metadata_replaced" in report
+    assert "metadata_kept_structural" in report
+    assert "removed_tags" in report
+    assert "replaced_tags" in report
+    assert "warnings" in report
+
+    # Basic sanity checks
+    assert isinstance(report["pixel_identical"], bool)
+    assert report["stream_hash_algo"] == "sha256-decoded-pixels"
+    assert isinstance(report["metadata_removed"], int)
+    assert isinstance(report["metadata_replaced"], int)
+    assert isinstance(report["removed_tags"], list)
+    assert isinstance(report["replaced_tags"], list)
+    assert isinstance(report["warnings"], list)
+
+
+def test_verify_endpoint_returns_report(
+    client: TestClient, sample_jpeg: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test that GET /api/verify/<token> returns the same verification report."""
+    # Mock ack to be present
+    ack_file = tmp_path / "ack"
+    ack_file.write_text("acknowledged\n")
+
+    from scrubmeta import ack
+
+    monkeypatch.setattr(ack, "ack_path", lambda: ack_file)
+
+    # First, scrub a file to get a token
+    with sample_jpeg.open("rb") as f:
+        scrub_response = client.post(
+            "/api/scrub",
+            files={"file": ("test.jpg", f, "image/jpeg")},
+        )
+
+    assert scrub_response.status_code == 200
+    scrub_data = scrub_response.json()
+    download_url = scrub_data["download_url"]
+    token = download_url.split("/")[-1]
+    original_report = scrub_data["report"]
+
+    # Now fetch the verification report via GET /api/verify/<token>
+    verify_response = client.get(f"/api/verify/{token}")
+    assert verify_response.status_code == 200
+    verify_data = verify_response.json()
+
+    # Check that the report matches
+    assert "report" in verify_data
+    assert verify_data["report"] == original_report
+
+
+def test_verify_endpoint_invalid_token(client: TestClient) -> None:
+    """Test that GET /api/verify/<invalid-token> returns 404."""
+    response = client.get("/api/verify/invalid-token-12345")
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"].lower()
+
+
+def test_verify_endpoint_expires_after_download(
+    client: TestClient, sample_jpeg: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test that the verification report expires when the file is downloaded."""
+    # Mock ack to be present
+    ack_file = tmp_path / "ack"
+    ack_file.write_text("acknowledged\n")
+
+    from scrubmeta import ack
+
+    monkeypatch.setattr(ack, "ack_path", lambda: ack_file)
+
+    # Scrub a file
+    with sample_jpeg.open("rb") as f:
+        scrub_response = client.post(
+            "/api/scrub",
+            files={"file": ("test.jpg", f, "image/jpeg")},
+        )
+
+    assert scrub_response.status_code == 200
+    download_url = scrub_response.json()["download_url"]
+    token = download_url.split("/")[-1]
+
+    # Verify report is accessible before download
+    verify_response_1 = client.get(f"/api/verify/{token}")
+    assert verify_response_1.status_code == 200
+
+    # Download the file
+    download_response = client.get(download_url)
+    assert download_response.status_code == 200
+
+    # Verify report should now be expired
+    verify_response_2 = client.get(f"/api/verify/{token}")
+    assert verify_response_2.status_code == 404

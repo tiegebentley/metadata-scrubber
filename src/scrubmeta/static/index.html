@@ -171,6 +171,62 @@
             font-size: 0.85rem;
         }
 
+        .verify-panel {
+            margin-top: 15px;
+            padding: 15px;
+            background: #f0f7ff;
+            border: 1px solid #2196f3;
+            border-radius: 5px;
+        }
+
+        .verify-panel h4 {
+            margin-top: 0;
+            margin-bottom: 10px;
+            color: #1976d2;
+        }
+
+        .verify-item {
+            display: flex;
+            justify-content: space-between;
+            margin: 8px 0;
+            padding: 8px;
+            background: white;
+            border-radius: 3px;
+            font-size: 0.9rem;
+        }
+
+        .verify-label {
+            font-weight: 500;
+            color: #555;
+        }
+
+        .verify-value {
+            color: #333;
+        }
+
+        .verify-value.yes {
+            color: #4caf50;
+            font-weight: 600;
+        }
+
+        .verify-value.no {
+            color: #f44336;
+            font-weight: 600;
+        }
+
+        .verify-warnings {
+            margin-top: 10px;
+            padding: 10px;
+            background: #fff3cd;
+            border-left: 3px solid #ffc107;
+            border-radius: 3px;
+        }
+
+        .verify-warnings ul {
+            margin: 5px 0 0 20px;
+            padding: 0;
+        }
+
         .error {
             margin-top: 20px;
             padding: 15px;
@@ -326,6 +382,23 @@
                 }
 
                 const data = await response.json();
+                const report = data.report;
+
+                // Build verification panel HTML
+                const pixelStatus = report.pixel_identical ? 'YES' : 'NO';
+                const pixelClass = report.pixel_identical ? 'yes' : 'no';
+
+                let warningsHtml = '';
+                if (report.warnings && report.warnings.length > 0) {
+                    warningsHtml = `
+                        <div class="verify-warnings">
+                            <strong>Warnings:</strong>
+                            <ul>
+                                ${report.warnings.map(w => `<li>${w}</li>`).join('')}
+                            </ul>
+                        </div>
+                    `;
+                }
 
                 result.innerHTML = `
                     <div class="result">
@@ -333,6 +406,31 @@
                         <a href="${data.download_url}" class="download-link" download>
                             Download Scrubbed File
                         </a>
+
+                        <div class="verify-panel">
+                            <h4>Verification</h4>
+                            <div class="verify-item">
+                                <span class="verify-label">Pixels identical to source:</span>
+                                <span class="verify-value ${pixelClass}">${pixelStatus}</span>
+                            </div>
+                            <div class="verify-item">
+                                <span class="verify-label">Verification method:</span>
+                                <span class="verify-value">${report.stream_hash_algo}</span>
+                            </div>
+                            <div class="verify-item">
+                                <span class="verify-label">Metadata removed:</span>
+                                <span class="verify-value">${report.metadata_removed} tags</span>
+                            </div>
+                            <div class="verify-item">
+                                <span class="verify-label">Metadata replaced:</span>
+                                <span class="verify-value">${report.metadata_replaced} tags</span>
+                            </div>
+                            <div class="verify-item">
+                                <span class="verify-label">Structural tags kept:</span>
+                                <span class="verify-value">${report.metadata_kept_structural} tags</span>
+                            </div>
+                            ${warningsHtml}
+                        </div>
 
                         <div class="diff-panel">
                             <button class="diff-toggle" onclick="toggleDiff()">

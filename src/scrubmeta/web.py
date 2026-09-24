@@ -20,10 +20,14 @@ from .ack import has_acknowledged
 from .formats import UnsupportedFormatError, get_handler
 from .provenance import has_c2pa_manifest
 from .randomize import Identity, generate_replacement_metadata
+from .verify import VerificationReport, build_report
 from .web_endpoints import register_media_endpoints
 
 # In-memory storage for scrubbed files (token -> path)
 _scrubbed_files: dict[str, Path] = {}
+
+# In-memory storage for verification reports (token -> report)
+_verification_reports: dict[str, VerificationReport] = {}
 
 # In-memory per-IP processing lock (max one scrub per client IP)
 _processing_ips: set[str] = set()
@@ -184,6 +188,9 @@ def create_app() -> FastAPI:
                     detail=f"Scrubbing failed: {e}",
                 ) from e
 
+            # Build verification report
+            report = build_report(src_path, dst_path, kind)
+
             # Compute metadata diff (simplified — just showing what verify() would produce)
             diff: dict[str, Any] = {
                 "source_file": src_path.name,
@@ -203,17 +210,35 @@ def create_app() -> FastAPI:
             # Generate download token
             token = secrets.token_urlsafe(16)
             _scrubbed_files[token] = dst_path
+            _verification_reports[token] = report
 
             return JSONResponse(
                 content={
                     "download_url": f"/download/{token}",
                     "diff": diff,
+                    "report": report.to_dict(),
                 }
             )
 
         finally:
             # Release processing lock
             _processing_ips.discard(client_ip)
+
+    @app.get("/api/verify/{token}")
+    async def get_verification_report(token: str) -> JSONResponse:
+        """Retrieve verification report for a scrubbed file.
+
+        Returns:
+            {"report": {...}} with the VerificationReport serialized to JSON
+
+        Raises:
+            404: Token not found or report expired
+        """
+        if token not in _verification_reports:
+            raise HTTPException(status_code=404, detail="Verification report not found or expired.")
+
+        report = _verification_reports[token]
+        return JSONResponse(content={"report": report.to_dict()})
 
     @app.get("/download/{token}")
     async def download_file(token: str) -> FileResponse:
@@ -226,6 +251,9 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="Download token not found or expired.")
 
         file_path = _scrubbed_files.pop(token)
+        # Also clean up the verification report
+        _verification_reports.pop(token, None)
+
         if not file_path.exists():
             raise HTTPException(status_code=404, detail="File not found.")
 
