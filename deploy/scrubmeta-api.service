@@ -1,0 +1,13 @@
+[Unit]
+Description=scrubmeta API (FastAPI backend, loopback only)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/metadata-scrubber
+ExecStart=/usr/local/bin/scrubmeta-web --host 127.0.0.1 --port 8770
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
