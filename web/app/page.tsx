@@ -56,6 +56,12 @@ async function api<T>(path: string, body: FormData, headers: Record<string, stri
   return json as T;
 }
 
+// crypto.randomUUID is only defined in secure contexts (https / localhost). The UI is
+// served over plain http on the tailnet, so fall back to a timestamp + random id.
+function newId(): string {
+  try { if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID(); } catch { /* fall through */ }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
 function bytes(n: number) { return n < 1048576 ? (n / 1024).toFixed(1) + " KB" : (n / 1048576).toFixed(2) + " MB"; }
 function secs(n: number | null | undefined) { return n == null ? "—" : `${n.toFixed(2)} s`; }
 
@@ -96,7 +102,7 @@ export default function Home() {
   }
   function record(item: Omit<HistoryItem, "id" | "completedAt">) {
     setHistory((prev) => {
-      const next = [{ ...item, id: crypto.randomUUID(), completedAt: new Date().toISOString() }, ...prev].slice(0, 50);
+      const next = [{ ...item, id: newId(), completedAt: new Date().toISOString() }, ...prev].slice(0, 50);
       try { localStorage.setItem("scrubmeta-history", JSON.stringify(next)); } catch { /* ignore */ }
       return next;
     });
