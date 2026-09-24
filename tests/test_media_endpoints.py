@@ -384,3 +384,51 @@ def test_repurpose_enforces_caps(client: TestClient) -> None:
         data={"mode": "review_copies", "recipients": "\n".join(f"Recipient {i}" for i in range(26))},
     )
     assert r.status_code == 400
+
+
+@needs_ffmpeg
+def test_repurpose_review_badge_is_confined_to_one_corner(client: TestClient, tmp_path: Path) -> None:
+    """Two review copies must differ only inside a small corner region.
+
+    Diffing two stamped outputs (rather than output vs source) isolates the
+    badge from re-encode noise. This is the guarantee that keeps review copies
+    a screener tool: the stamp is visible, but it never spreads across the
+    frame or shrinks below the floor.
+    """
+    import io
+    import zipfile
+
+    from PIL import Image, ImageChops
+
+    from scrubmeta.media_tools import extract_frame
+
+    r = client.post(
+        "/api/repurpose",
+        files={"file": _mp4()},
+        data={"mode": "review_copies", "recipients": "@alicechen\n@bob_ortiz", "corner": "br", "size_pct": "1"},
+    )
+    assert r.status_code == 200
+    d = client.get(r.json()["download_url"])
+    assert d.status_code == 200
+
+    frames: list[Image.Image] = []
+    with zipfile.ZipFile(io.BytesIO(d.content)) as zf:
+        names = sorted(zf.namelist())
+        assert names == ["review-alicechen.mp4", "review-bob_ortiz.mp4"]
+        for name in names:
+            video = tmp_path / name
+            video.write_bytes(zf.read(name))
+            frame = tmp_path / f"{name}.png"
+            extract_frame(video, frame, 0.5)
+            frames.append(Image.open(frame).convert("RGB"))
+
+    a, b = frames
+    w, h = a.size
+    mask = ImageChops.difference(a, b).convert("L").point(lambda p: 255 if p > 40 else 0)
+    bbox = mask.getbbox()
+    assert bbox is not None, "stamps must differ between recipients"
+    x0, y0, x1, y1 = bbox
+    assert (x1 - x0) / w <= 0.45, "badge spreads too far horizontally"
+    assert (y1 - y0) / h <= 0.12, "badge spreads too far vertically"
+    assert (y1 - y0) / h >= 0.025, "badge shrank below the visibility floor"
+    assert x1 > w * 0.75 and y0 > h * 0.75, "badge is not in the requested bottom-right corner"
