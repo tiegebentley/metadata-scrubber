@@ -21,6 +21,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
 from .media_tools import MediaToolError, convert, extract_frame, make_clip, probe, trim_video
+from .repurpose import caption_variants, create_zip, format_matrix, review_copies, subtitle_variants
 from .similarity import compare_images
 from .variations import PRESETS, export_variation
 
@@ -209,3 +210,92 @@ def register_media_endpoints(
             })
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
+
+    @app.post("/api/repurpose")
+    async def repurpose_file(
+        file: UploadFile = File(...),  # noqa: B008
+        mode: str = Form(...),  # noqa: B008
+        presets: list[str] = Form([]),  # noqa: B008
+        captions: str = Form(""),  # noqa: B008
+        recipients: str = Form(""),  # noqa: B008
+        position: str = Form("top"),  # noqa: B008
+        corner: str = Form("tl"),  # noqa: B008
+        size_pct: float = Form(5.0),  # noqa: B008
+        color: str = Form("white"),  # noqa: B008
+        quality: int = Form(90),  # noqa: B008
+        srt_files: list[UploadFile] = File([]),  # noqa: B008
+    ) -> JSONResponse:
+        """Repurpose a single source into multiple purposeful outputs."""
+        temp_dir, src = save_upload(file)
+
+        # Parse multi-line inputs
+        caption_list = [line.strip() for line in captions.split("\n") if line.strip()]
+        recipient_list = [line.strip() for line in recipients.split("\n") if line.strip()]
+
+        # Caps enforcement
+        if mode == "format_matrix" and len(presets) > 4:
+            raise fail(temp_dir, 400, "Format matrix is capped at 4 presets.")
+        if mode == "caption_variants" and len(caption_list) > 10:
+            raise fail(temp_dir, 400, "Caption variants are capped at 10 captions.")
+        if mode == "subtitle_localization" and len(srt_files) > 10:
+            raise fail(temp_dir, 400, "Subtitle localization is capped at 10 SRT files.")
+        if mode == "review_copies" and len(recipient_list) > 25:
+            raise fail(temp_dir, 400, "Review copies are capped at 25 recipients.")
+
+        # Size cap: estimate total output size (conservative: source_size × count)
+        output_count = 0
+        if mode == "format_matrix":
+            output_count = len(presets)
+        elif mode == "caption_variants":
+            output_count = len(caption_list)
+        elif mode == "subtitle_localization":
+            output_count = len(srt_files)
+        elif mode == "review_copies":
+            output_count = len(recipient_list)
+
+        src_size = src.stat().st_size
+        estimated_total = src_size * output_count
+        if estimated_total > 2 * 1024 * 1024 * 1024:  # 2 GB
+            raise fail(
+                temp_dir,
+                413,
+                f"Estimated output size ({output_count} × {src_size // (1024*1024)} MB) "
+                "would exceed 2 GB limit.",
+            )
+
+        try:
+            outputs: list[Path] = []
+
+            if mode == "format_matrix":
+                outputs = format_matrix(src, temp_dir, presets, quality)
+            elif mode == "caption_variants":
+                outputs = caption_variants(src, temp_dir, caption_list, position, size_pct, color)
+            elif mode == "subtitle_localization":
+                # Save uploaded SRT files to temp_dir
+                srt_paths: list[Path] = []
+                for srt_upload in srt_files:
+                    srt_path = temp_dir / Path(srt_upload.filename or "subtitle.srt").name
+                    _write_upload(srt_upload, srt_path, max_file_size)
+                    srt_paths.append(srt_path)
+                outputs = subtitle_variants(src, temp_dir, srt_paths)
+            elif mode == "review_copies":
+                outputs = review_copies(src, temp_dir, recipient_list, corner, size_pct)
+            else:
+                raise fail(temp_dir, 400, f"Unknown mode: {mode}")
+
+            # Pack all outputs into a zip
+            zip_path = temp_dir / f"{src.stem}.repurpose.zip"
+            create_zip(outputs, zip_path)
+
+            # Clean up individual outputs, keep only the zip
+            for out in outputs:
+                out.unlink(missing_ok=True)
+            src.unlink(missing_ok=True)
+
+            return JSONResponse(content={
+                "download_url": register_download(zip_path),
+                "outputs": [out.name for out in outputs],
+                "count": len(outputs),
+            })
+        except MediaToolError as exc:
+            raise fail(temp_dir, 422, str(exc)) from exc
