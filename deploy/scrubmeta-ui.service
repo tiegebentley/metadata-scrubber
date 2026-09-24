@@ -9,8 +9,8 @@ WorkingDirectory=/root/metadata-scrubber/web
 Environment=NODE_ENV=production
 # Dev-only fallback for the /backend rewrite; production pages call the API
 # directly via NEXT_PUBLIC_SCRUBMETA_API, which is inlined at `next build`.
-Environment=SCRUBMETA_API_URL=http://100.79.168.65:8770
-ExecStart=/usr/bin/env npx next start --hostname 100.79.168.65 --port 3000
+Environment=SCRUBMETA_API_URL=http://127.0.0.1:8770
+ExecStart=/usr/bin/env npx next start --hostname 127.0.0.1 --port 3000
 Restart=on-failure
 RestartSec=3
 

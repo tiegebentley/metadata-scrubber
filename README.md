@@ -28,6 +28,27 @@ System dependencies: `exiftool`, `ffmpeg` (includes `ffprobe`), and optionally
 ImageMagick (`magick`) for higher-fidelity pixel hashing in the round-trip
 tests.
 
+## Running on the VPS (HTTPS via Tailscale)
+
+Both services bind to loopback; `tailscale serve` terminates TLS with a real
+Let's Encrypt certificate for the machine's MagicDNS name and forwards to them.
+Only devices on the tailnet can reach either.
+
+    tailscale serve --bg --https=3443 http://127.0.0.1:3000   # UI
+    tailscale serve --bg --https=8443 http://127.0.0.1:8770   # API
+
+- UI:  https://ubuntu-16gb-ash-1.tail9b86f6.ts.net:3443
+- API: https://ubuntu-16gb-ash-1.tail9b86f6.ts.net:8443
+
+The API origin is baked into the UI bundle from `web/.env.production` at
+`next build`; the API's allowed browser origin is set by `SCRUBMETA_CORS_ORIGINS`
+in `deploy/scrubmeta-api.service`. Change either and rebuild/restart.
+Port 443 is deliberately not used: Apache already owns it on this host.
+
+Browser-level check after any UI change:
+
+    CHROMIUM_PATH=... python3 deploy/e2e_review_copies.py https://<host>:3443 /path/video.mp4
+
 ## Usage
 
 ```bash

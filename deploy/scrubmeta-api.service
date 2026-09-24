@@ -7,8 +7,8 @@ Type=simple
 WorkingDirectory=/root/metadata-scrubber
 # The browser uploads straight to this service (no proxy in between), so it
 # must be reachable from the same network the UI is served on.
-Environment=SCRUBMETA_CORS_ORIGINS=http://100.79.168.65:3000
-ExecStart=/usr/local/bin/scrubmeta-web --host 100.79.168.65 --port 8770
+Environment=SCRUBMETA_CORS_ORIGINS=https://ubuntu-16gb-ash-1.tail9b86f6.ts.net:3443
+ExecStart=/usr/local/bin/scrubmeta-web --host 127.0.0.1 --port 8770
 Restart=on-failure
 RestartSec=3
 
