@@ -8,7 +8,7 @@ import {
 
 /* ---------- types ---------- */
 
-type Tool = "scrub" | "convert" | "inspect" | "editor" | "generator" | "export" | "duplicates" | "history" | "settings";
+type Tool = "scrub" | "convert" | "inspect" | "editor" | "generator" | "repurpose" | "duplicates" | "history" | "settings";
 type Health = "checking" | "online" | "offline";
 
 type DownloadResult = { download_url: string; output_file: string; inspection?: Inspection; preset?: string };
@@ -35,7 +35,7 @@ const tools: { id: Tool; label: string; icon: typeof ShieldCheck }[] = [
   { id: "convert", label: "Convert", icon: RefreshCw },
   { id: "editor", label: "Editor", icon: Scissors },
   { id: "generator", label: "Generator", icon: WandSparkles },
-  { id: "export", label: "Export", icon: Layers },
+  { id: "repurpose", label: "Repurpose", icon: Layers },
   { id: "duplicates", label: "Duplicates", icon: Copy },
 ];
 
@@ -125,7 +125,7 @@ export default function Home() {
         {tool === "convert" && <Convert {...common} />}
         {tool === "editor" && <Editor {...common} />}
         {tool === "generator" && <Generator {...common} />}
-        {tool === "export" && <Export {...common} />}
+        {tool === "repurpose" && <Repurpose {...common} />}
         {tool === "duplicates" && <Duplicates files={files} owned={owned} setOwned={setOwned} choose={() => multiPicker.current?.click()} clear={() => setFiles([])} drop={drop} record={record} />}
         {tool === "history" && <HistoryView items={history} clear={() => { setHistory([]); try { localStorage.removeItem("scrubmeta-history"); } catch { /* ignore */ } }} />}
         {tool === "settings" && <SettingsView health={health} ping={ping} />}
@@ -355,43 +355,125 @@ function Generator(p: ToolProps) {
   );
 }
 
-function Export(p: ToolProps) {
+function Repurpose(p: ToolProps) {
+  const [mode, setMode] = useState<"format_matrix" | "caption_variants" | "subtitle_localization" | "review_copies">("format_matrix");
   const [presets, setPresets] = useState<Record<string, Preset>>({});
-  const [preset, setPreset] = useState("vertical");
+  const [selectedPresets, setSelectedPresets] = useState<string[]>(["vertical"]);
   const [quality, setQuality] = useState(90);
-  const { busy, error, result, run } = useRun<DownloadResult>();
+  const [captions, setCaptions] = useState("");
+  const [recipients, setRecipients] = useState("");
+  const [position, setPosition] = useState<"top" | "bottom">("top");
+  const [corner, setCorner] = useState<"tl" | "tr" | "bl" | "br">("tl");
+  const [size, setSize] = useState(5);
+  const [color, setColor] = useState("white");
+  const [srtFiles, setSrtFiles] = useState<File[]>([]);
+  const srtPicker = useRef<HTMLInputElement>(null);
+  const { busy, error, result, run, reset } = useRun<{ download_url: string; outputs: string[]; count: number }>();
+
   useEffect(() => { fetch("/backend/api/export-presets").then((r) => r.json()).then(setPresets).catch(() => setPresets({})); }, []);
+
+  const captionCount = captions.split("\n").filter((l) => l.trim()).length;
+  const recipientCount = recipients.split("\n").filter((l) => l.trim()).length;
+
+  function togglePreset(id: string) {
+    setSelectedPresets((prev) => prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id]);
+  }
+
   async function go() {
     if (!p.file) return;
-    const body = new FormData(); body.append("file", p.file); body.append("preset", preset); body.append("quality", String(quality));
+    const body = new FormData();
+    body.append("file", p.file);
+    body.append("mode", mode);
+    body.append("quality", String(quality));
+
+    if (mode === "format_matrix") {
+      selectedPresets.forEach((preset) => body.append("presets", preset));
+    } else if (mode === "caption_variants") {
+      body.append("captions", captions);
+      body.append("position", position);
+      body.append("size_pct", String(size));
+      body.append("color", color);
+    } else if (mode === "subtitle_localization") {
+      srtFiles.forEach((srt) => body.append("srt_files", srt));
+    } else if (mode === "review_copies") {
+      body.append("recipients", recipients);
+      body.append("corner", corner);
+      body.append("size_pct", String(size));
+    }
+
     await run(async () => {
-      const r = await api<DownloadResult>("/api/variations", body);
-      p.record({ tool: `Export ${presets[preset]?.label ?? preset}`, name: p.file!.name, size: p.file!.size, output: r.output_file });
+      const r = await api<{ download_url: string; outputs: string[]; count: number }>("/api/repurpose", body);
+      p.record({ tool: `Repurpose (${mode})`, name: p.file!.name, size: p.file!.size, output: `${r.count} outputs` });
       return r;
     });
   }
+
   return (
-    <ToolPage tabs={["Canvas export"]} active={0}>
+    <ToolPage tabs={["Format matrix", "Caption variants", "Subtitle localization", "Review copies"]} active={["format_matrix", "caption_variants", "subtitle_localization", "review_copies"].indexOf(mode)} setActive={(n) => { setMode(["format_matrix", "caption_variants", "subtitle_localization", "review_copies"][n] as any); reset(); }}>
+      <div className="centerTitle"><h1>Repurpose</h1><p>One source, many purposeful versions.</p></div>
       <FileTitle file={p.file} clear={p.clear} />
-      {!p.file ? <DropZone title="Choose a video to export" sub="Fit the whole frame onto a fixed canvas (vertical, square, landscape, HD). Letterboxed, never cropped." choose={p.choose} drop={p.drop} /> : (
+      {!p.file ? <DropZone title="Choose a video to repurpose" sub="Create multiple outputs from one source, each visibly different." choose={p.choose} drop={p.drop} /> : (
         <div className="workGrid">
           <Preview file={p.file} />
           <div className="controls">
-            <ControlTitle title="Canvas preset" />
-            <div className="presetGrid">
-              {Object.entries(presets).map(([id, pr]) => (
-                <button key={id} className={preset === id ? "preset active" : "preset"} onClick={() => setPreset(id)}><b>{pr.label}</b><small>{pr.width} × {pr.height}</small></button>
-              ))}
-            </div>
-            <Range label="Quality" value={quality} onChange={setQuality} />
-            <p className="notice"><Info />Same input and preset always produce the same output. There is no randomization.</p>
+            {mode === "format_matrix" && (
+              <>
+                <ControlTitle title="Canvas presets" />
+                <div className="presetGrid">
+                  {Object.entries(presets).map(([id, pr]) => (
+                    <button key={id} className={selectedPresets.includes(id) ? "preset active" : "preset"} onClick={() => togglePreset(id)}><b>{pr.label}</b><small>{pr.width} × {pr.height}</small></button>
+                  ))}
+                </div>
+                <Row label="Selected" value={`${selectedPresets.length} / 4 presets`} />
+                <Range label="Quality" value={quality} onChange={setQuality} />
+              </>
+            )}
+            {mode === "caption_variants" && (
+              <>
+                <ControlTitle title="Caption text" />
+                <label className="field"><span>Captions (one per line, max 10)</span><textarea value={captions} onChange={(e) => setCaptions(e.target.value)} rows={5} placeholder="Hook line 1&#10;Hook line 2&#10;Call to action" /></label>
+                <Row label="Count" value={`${captionCount} / 10`} />
+                <div className="two">
+                  <label className="field"><span>Position</span><select value={position} onChange={(e) => setPosition(e.target.value as any)}><option value="top">Top</option><option value="bottom">Bottom</option></select></label>
+                  <label className="field"><span>Color</span><select value={color} onChange={(e) => setColor(e.target.value)}><option value="white">White</option><option value="black">Black</option><option value="yellow">Yellow</option><option value="red">Red</option><option value="blue">Blue</option></select></label>
+                </div>
+                <Range label="Size (%)" value={size} onChange={setSize} min={2} max={10} />
+              </>
+            )}
+            {mode === "subtitle_localization" && (
+              <>
+                <ControlTitle title="Subtitle files" />
+                <button className="textButton" onClick={() => srtPicker.current?.click()}>Choose SRT files (max 10)</button>
+                <input ref={srtPicker} type="file" accept=".srt" multiple hidden onChange={(e) => setSrtFiles(Array.from(e.target.files || []).slice(0, 10))} />
+                {srtFiles.length > 0 && (
+                  <div className="fileChips">{srtFiles.map((f) => <span key={f.name}>{f.name}</span>)}</div>
+                )}
+                <Row label="Count" value={`${srtFiles.length} / 10`} />
+              </>
+            )}
+            {mode === "review_copies" && (
+              <>
+                <ControlTitle title="Recipients" />
+                <label className="field"><span>Recipient names (one per line, max 25)</span><textarea value={recipients} onChange={(e) => setRecipients(e.target.value)} rows={5} placeholder="Alice Johnson&#10;Bob Smith&#10;Carol Williams" /></label>
+                <Row label="Count" value={`${recipientCount} / 25`} />
+                <label className="field"><span>Stamp corner</span><select value={corner} onChange={(e) => setCorner(e.target.value as any)}><option value="tl">Top left</option><option value="tr">Top right</option><option value="bl">Bottom left</option><option value="br">Bottom right</option></select></label>
+                <Range label="Size (%)" value={size} onChange={setSize} min={2} max={10} />
+                <p className="notice"><Info />Stamps are always visible (min 2.5% size, 70% opacity) to prevent misuse as a variant generator.</p>
+              </>
+            )}
             <Ownership owned={p.owned} setOwned={p.setOwned} />
           </div>
         </div>
       )}
-      {result && <ResultBar title="Export complete" sub={`${result.output_file} · ${presets[result.preset ?? ""]?.label ?? result.preset}`} href={result.download_url} />}
+      {result && (
+        <div className="panel">
+          <h3>{result.count} outputs generated</h3>
+          <div className="fileChips">{result.outputs.map((name, i) => <span key={i}>{name}</span>)}</div>
+          <a href={`/backend${result.download_url}`} className="textButton"><Download />Download ZIP</a>
+        </div>
+      )}
       {error && <div className="error">{error}</div>}
-      <Action disabled={!p.file || !p.owned || busy || !presets[preset]} busy={busy} onClick={go}>Export</Action>
+      <Action disabled={!p.file || !p.owned || busy || (mode === "format_matrix" && selectedPresets.length === 0) || (mode === "caption_variants" && captionCount === 0) || (mode === "subtitle_localization" && srtFiles.length === 0) || (mode === "review_copies" && recipientCount === 0)} busy={busy} onClick={go}>Generate outputs</Action>
     </ToolPage>
   );
 }

@@ -145,3 +145,157 @@ def test_duplicates_caps_batch_size(client: TestClient, tmp_path: Path) -> None:
     files = [("files", one)] * 101
     r = client.post("/api/duplicates", files=files, data={"threshold": "90"})
     assert r.status_code == 400
+
+
+@needs_ffmpeg
+def test_repurpose_format_matrix_exports_multiple_presets(client: TestClient) -> None:
+    r = client.post(
+        "/api/repurpose",
+        files={"file": _mp4()},
+        data={"mode": "format_matrix", "presets": ["vertical", "square"], "quality": "60"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["count"] == 2
+    assert len(body["outputs"]) == 2
+    assert any("vertical" in name for name in body["outputs"])
+    assert any("square" in name for name in body["outputs"])
+
+    # Download and verify it's a zip
+    d = client.get(body["download_url"])
+    assert d.status_code == 200
+    assert d.content[:4] == b"PK\x03\x04"  # ZIP magic number
+
+
+@needs_ffmpeg
+def test_repurpose_caption_variants_burns_in_text(client: TestClient, tmp_path: Path) -> None:
+    r = client.post(
+        "/api/repurpose",
+        files={"file": _mp4()},
+        data={
+            "mode": "caption_variants",
+            "captions": "Test caption 1\nTest caption 2",
+            "position": "top",
+            "size_pct": "5",
+            "color": "white",
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["count"] == 2
+
+    # Download zip and extract to verify content
+    d = client.get(body["download_url"])
+    assert d.status_code == 200
+
+    # Verify the outputs have different frames (text is burned in)
+    import zipfile
+    from io import BytesIO
+
+    from scrubmeta.media_tools import extract_frame
+
+    zip_data = BytesIO(d.content)
+    with zipfile.ZipFile(zip_data, "r") as zf:
+        assert len(zf.namelist()) == 2
+        # Extract both videos
+        for name in zf.namelist():
+            video_path = tmp_path / name
+            video_path.write_bytes(zf.read(name))
+            # Extract a frame to verify it's valid video
+            frame_path = tmp_path / f"{name}.frame.jpg"
+            extract_frame(video_path, frame_path, 0.5)
+            assert frame_path.exists()
+            assert frame_path.stat().st_size > 0
+
+
+@needs_ffmpeg
+def test_repurpose_subtitle_localization_with_srt(client: TestClient, tmp_path: Path) -> None:
+    # Create a simple SRT file
+    srt_path = tmp_path / "test.en.srt"
+    srt_path.write_text("1\n00:00:00,000 --> 00:00:02,000\nHello world\n")
+
+    r = client.post(
+        "/api/repurpose",
+        files={"file": _mp4(), "srt_files": ("test.en.srt", srt_path.read_bytes(), "text/plain")},
+        data={"mode": "subtitle_localization"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["count"] == 1
+    assert any("en.mp4" in name for name in body["outputs"])
+
+
+@needs_ffmpeg
+def test_repurpose_review_copies_includes_visible_stamp(client: TestClient, tmp_path: Path) -> None:
+    r = client.post(
+        "/api/repurpose",
+        files={"file": _mp4()},
+        data={
+            "mode": "review_copies",
+            "recipients": "Alice Johnson\nBob Smith",
+            "corner": "tl",
+            "size_pct": "3",
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["count"] == 2
+
+    # Download zip and verify stamps are visible
+    d = client.get(body["download_url"])
+    assert d.status_code == 200
+
+    import zipfile
+    from io import BytesIO
+
+    from PIL import Image
+
+    from scrubmeta.media_tools import extract_frame
+
+    zip_data = BytesIO(d.content)
+    with zipfile.ZipFile(zip_data, "r") as zf:
+        assert len(zf.namelist()) == 2
+        # Extract first video and check that a frame differs from source
+        first_video = tmp_path / zf.namelist()[0]
+        first_video.write_bytes(zf.read(zf.namelist()[0]))
+
+        stamped_frame = tmp_path / "stamped.jpg"
+        source_frame = tmp_path / "source.jpg"
+
+        extract_frame(first_video, stamped_frame, 0.5)
+        extract_frame(FIXTURE_MP4, source_frame, 0.5)
+
+        # Compare frames - they should differ (stamp is present)
+        stamped_img = Image.open(stamped_frame)
+        source_img = Image.open(source_frame)
+
+        # Convert to same size for comparison
+        if stamped_img.size != source_img.size:
+            source_img = source_img.resize(stamped_img.size)
+
+        import numpy as np
+
+        stamped_arr = np.array(stamped_img)
+        source_arr = np.array(source_img)
+
+        # Images should differ due to stamp
+        diff = np.abs(stamped_arr.astype(int) - source_arr.astype(int)).sum()
+        assert diff > 1000, "Stamp should be visible on the frame"
+
+
+def test_repurpose_enforces_caps(client: TestClient) -> None:
+    # Test caption cap
+    r = client.post(
+        "/api/repurpose",
+        files={"file": _mp4()},
+        data={"mode": "caption_variants", "captions": "\n".join(f"Caption {i}" for i in range(11))},
+    )
+    assert r.status_code == 400
+
+    # Test recipient cap
+    r = client.post(
+        "/api/repurpose",
+        files={"file": _mp4()},
+        data={"mode": "review_copies", "recipients": "\n".join(f"Recipient {i}" for i in range(26))},
+    )
+    assert r.status_code == 400
