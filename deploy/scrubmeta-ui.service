@@ -1,0 +1,16 @@
+[Unit]
+Description=scrubmeta web UI (Next.js, served on the tailnet)
+After=network.target scrubmeta-api.service
+Wants=scrubmeta-api.service
+
+[Service]
+Type=simple
+WorkingDirectory=/root/metadata-scrubber/web
+Environment=NODE_ENV=production
+Environment=SCRUBMETA_API_URL=http://127.0.0.1:8770
+ExecStart=/usr/bin/env npx next start --hostname 100.79.168.65 --port 3000
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

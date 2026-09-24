@@ -20,6 +20,7 @@ from .ack import has_acknowledged
 from .formats import UnsupportedFormatError, get_handler
 from .provenance import has_c2pa_manifest
 from .randomize import Identity, generate_replacement_metadata
+from .web_endpoints import register_media_endpoints
 
 # In-memory storage for scrubbed files (token -> path)
 _scrubbed_files: dict[str, Path] = {}
@@ -243,6 +244,8 @@ def create_app() -> FastAPI:
             file_path.parent.rmdir()
 
         return response
+
+    register_media_endpoints(app, _scrubbed_files, MAX_FILE_SIZE)
 
     return app
 
