@@ -45,31 +45,51 @@ const tools: { id: Tool; label: string; icon: typeof ShieldCheck }[] = [
 /* ---------- API helper ---------- */
 
 /** Progress reported to the caller while an upload is in flight. */
-type Progress = { phase: "uploading" | "processing"; pct: number };
+type Progress = { phase: "reading" | "uploading" | "processing"; pct: number };
 let onProgress: ((p: Progress | null) => void) | null = null;
 
 class UploadError extends Error {
   constructor(message: string, public readonly retryable: boolean) { super(message); }
 }
 
-/** Chrome on Android can lose access to a picked file (the OS revokes the handle
- *  after a while, or when the providing app is killed). fetch() then fails
- *  mid-stream with a bare "Failed to fetch". Reading a slice from each end up
- *  front turns that into a clear, actionable error before any bytes are sent. */
-async function assertReadable(body: FormData): Promise<void> {
-  for (const v of body.values()) {
-    if (!(v instanceof Blob)) continue;
-    try {
-      await v.slice(0, Math.min(65536, v.size)).arrayBuffer();
-      if (v.size > 65536) await v.slice(v.size - 65536).arrayBuffer();
-    } catch {
-      throw new UploadError(
-        "The selected file can't be read anymore (Android revokes file access after a while). " +
-        "Remove it, pick it again, and retry.", false);
-    }
-  }
+/** Copy every file in the form into memory before uploading.
+ *
+ *  On Android, files picked through Google Photos (and some other providers)
+ *  reach Chrome as streamed references whose reported size may not match what
+ *  actually streams; Chrome then aborts the upload part-way with a bare
+ *  "Failed to fetch". Reading the whole file with arrayBuffer() uses a
+ *  different path that works, and uploading the in-memory copy sidesteps the
+ *  mismatch entirely. Files above BUFFER_LIMIT are streamed as-is (they would
+ *  not fit comfortably in a phone's memory) after a quick readability probe. */
+const BUFFER_LIMIT = 150 * 1024 * 1024;
+
+function unreadable(): UploadError {
+  return new UploadError(
+    "Chrome couldn't read the selected file. On Android this usually means it was picked " +
+    "through Photos; remove it, tap the drop zone again, and choose it through the Files app instead.",
+    false);
 }
 
+async function stableBody(body: FormData): Promise<FormData> {
+  const out = new FormData();
+  for (const [key, value] of body.entries()) {
+    if (!(value instanceof Blob)) { out.append(key, value); continue; }
+    if (value.size <= BUFFER_LIMIT) {
+      onProgress?.({ phase: "reading", pct: 0 });
+      let buf: ArrayBuffer;
+      try { buf = await value.arrayBuffer(); } catch { throw unreadable(); }
+      const name = value instanceof File ? value.name : "upload";
+      out.append(key, new File([buf], name, { type: value.type }));
+    } else {
+      try {
+        await value.slice(0, 65536).arrayBuffer();
+        await value.slice(value.size - 65536).arrayBuffer();
+      } catch { throw unreadable(); }
+      out.append(key, value);
+    }
+  }
+  return out;
+}
 function xhrUpload<T>(url: string, body: FormData, headers: Record<string, string>): Promise<T> {
   return new Promise((resolve, reject) => {
     const x = new XMLHttpRequest();
@@ -95,7 +115,7 @@ function xhrUpload<T>(url: string, body: FormData, headers: Record<string, strin
 }
 
 async function api<T>(path: string, body: FormData, headers: Record<string, string> = {}): Promise<T> {
-  await assertReadable(body);
+  const stable = await stableBody(body);
   // Retry transient network drops with backoff. Chrome aborts in-flight requests
   // with ERR_NETWORK_CHANGED whenever an interface or route changes (VPN
   // re-establishing, Wi-Fi <-> cellular handoff), so one attempt is not enough
@@ -104,7 +124,7 @@ async function api<T>(path: string, body: FormData, headers: Record<string, stri
   try {
     for (let attempt = 0; ; attempt++) {
       try {
-        return await xhrUpload<T>(`${API}${path}`, body, headers);
+        return await xhrUpload<T>(`${API}${path}`, stable, headers);
       } catch (e) {
         if (!(e instanceof UploadError) || !e.retryable || attempt >= delays.length) throw e;
         onProgress?.({ phase: "uploading", pct: 0 });
@@ -724,6 +744,7 @@ function ResultBar({ title, sub, href }: { title: string; sub: string; href: str
 }
 function Action({ disabled, busy, progress, onClick, children }: { disabled?: boolean; busy?: boolean; progress?: Progress | null; onClick?: () => void; children: ReactNode }) {
   const label = !busy ? children
+    : progress?.phase === "reading" ? "Reading file…"
     : progress?.phase === "uploading" ? `Uploading ${progress.pct}%…`
     : "Processing…";
   return <><div className="divider" /><button className="start" disabled={disabled} onClick={onClick}>{busy ? <><RefreshCw className="spin" />{label}</> : label}</button></>;
