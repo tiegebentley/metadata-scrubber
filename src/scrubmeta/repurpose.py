@@ -18,6 +18,8 @@ from pathlib import Path
 
 from .media_tools import MediaToolError, _crf_for_quality, _run
 from .variations import PRESETS, export_variation
+import random
+from . import similarity, media_tools
 
 # Enforced visibility floors for review-copy stamps
 MIN_STAMP_SIZE_PCT = 2.5  # % of frame height
@@ -30,6 +32,28 @@ def _escape_drawtext(text: str) -> str:
     # Order matters: backslash first, then others
     return text.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'").replace("%", "\\%")
 
+def random_transform(in_path, out_path, is_video=False):
+    transforms = [
+        ['-vf', 'hflip'],
+        ['-vf', 'vflip'],
+        ['-vf', 'crop=in_w-20:in_h-20'],
+        ['-vf', 'scale=iw*0.9:ih*0.9'],
+    ]
+    args = random.choice(transforms)
+    media_tools._run(['-y', '-i', str(in_path)] + args + [str(out_path)])
+
+SIMILARITY_THRESHOLD = 0.8
+
+def variant_with_similarity_below(in_path, out_path, is_video=False, max_attempts=10):
+    for _ in range(max_attempts):
+        random_transform(in_path, out_path, is_video)
+        if is_video:
+            sim = similarity.compare_media(in_path, out_path)
+        else:
+            sim = similarity.compare_images(in_path, out_path)
+        if sim < SIMILARITY_THRESHOLD:
+            return sim
+    return sim
 
 def format_matrix(
     src: Path,
@@ -185,7 +209,7 @@ def review_copies(
 
     today = datetime.date.today().isoformat()
 
-    outputs: list[Path] = []
+    outputs: list[dict] = []
     for recipient in recipients:
         if not recipient.strip():
             continue
@@ -261,13 +285,18 @@ def review_copies(
         safe_name = "".join(c if c.isalnum() or c in " -_" else "_" for c in name_for_file)
         safe_name = safe_name.replace(" ", "-")[:50]  # cap length
 
-        dst = out_dir / f"review-{safe_name}.mp4"
-        _run([
-            "ffmpeg", "-y", "-i", str(src), "-vf", drawtext,
-            "-c:v", "libx264", "-crf", _crf_for_quality(90), "-preset", "medium",
-            "-c:a", "copy", "-movflags", "+faststart", str(dst),
-        ])
-        outputs.append(dst)
+    is_video = src.suffix.lower() in [".mp4", ".avi", ".mov", ".webm"]
+    temp_out = out_dir / f"temp_{safe_name}.mp4"
+    sim = variant_with_similarity_below(src, temp_out, is_video)
+
+    dst = out_dir / f"review-{safe_name}.mp4"
+    _run([
+        "ffmpeg", "-y", "-i", str(temp_out), "-vf", drawtext,
+        "-c:v", "libx264", "-crf", _crf_for_quality(90), "-preset", "medium",
+        "-c:a", "copy", "-movflags", "+faststart", str(dst),
+    ])
+    outputs.append({"file": dst, "similarity": sim})
+    temp_out.unlink(missing_ok=True)
 
     return outputs
 

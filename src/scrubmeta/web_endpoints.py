@@ -30,7 +30,7 @@ MAX_DUPLICATE_SIZE = 500 * 1024 * 1024
 
 
 def _write_upload(upload: UploadFile, dest: Path, limit: int, running_total: int = 0) -> int:
-    """Stream `upload` to `dest`, enforcing `limit` bytes across the call."""
+    """Stream upload to dest, enforcing limit bytes across the call."""
     total = running_total
     with dest.open("wb") as handle:
         while chunk := upload.file.read(1024 * 1024):
@@ -46,7 +46,7 @@ def register_media_endpoints(
     downloads: dict[str, Path],
     max_file_size: int,
 ) -> None:
-    """Attach the media-suite endpoints to `app`."""
+    """Attach the media-suite endpoints to app."""
 
     def save_upload(upload: UploadFile) -> tuple[Path, Path]:
         temp_dir = Path(tempfile.mkdtemp(prefix="scrubmeta-media-"))
@@ -97,7 +97,7 @@ def register_media_endpoints(
             raise fail(temp_dir, 422, str(exc)) from exc
         src.unlink(missing_ok=True)
         return JSONResponse(content={
-            "download_url": register_download(dst),
+"download_url": register_download(dst),
             "output_file": dst.name,
             "inspection": probe(dst),
         })
@@ -203,7 +203,7 @@ def register_media_endpoints(
                 matches: list[dict[str, Any]] = [dict(m) for m in compare_media(paths, threshold)]
             except Exception as exc:
                 raise HTTPException(
-                    status_code=422, detail=f"Unable to compare selected files: {exc}"
+status_code=422, detail=f"Unable to compare selected files: {exc}"
                 ) from exc
             return JSONResponse(content={
                 "threshold": threshold,
@@ -268,13 +268,13 @@ def register_media_endpoints(
 
         try:
             outputs: list[Path] = []
+            review_info = None
 
             if mode == "format_matrix":
                 outputs = format_matrix(src, temp_dir, presets, quality)
             elif mode == "caption_variants":
                 outputs = caption_variants(src, temp_dir, caption_list, position, size_pct, color)
             elif mode == "subtitle_localization":
-                # Save uploaded SRT files to temp_dir
                 srt_paths: list[Path] = []
                 for srt_upload in srt_files:
                     srt_path = temp_dir / Path(srt_upload.filename or "subtitle.srt").name
@@ -282,23 +282,30 @@ def register_media_endpoints(
                     srt_paths.append(srt_path)
                 outputs = subtitle_variants(src, temp_dir, srt_paths)
             elif mode == "review_copies":
-                outputs = review_copies(src, temp_dir, recipient_list, corner, size_pct)
+                review_outputs = review_copies(src, temp_dir, recipient_list, corner, size_pct)
+                outputs = [item["file"] for item in review_outputs]
+                review_info = [
+                    {"file": str(item["file"].name), "similarity": item["similarity"]}
+                    for item in review_outputs
+                ]
             else:
                 raise fail(temp_dir, 400, f"Unknown mode: {mode}")
 
             # Pack all outputs into a zip
             zip_path = temp_dir / f"{src.stem}.repurpose.zip"
             create_zip(outputs, zip_path)
-
-            # Clean up individual outputs, keep only the zip
             for out in outputs:
                 out.unlink(missing_ok=True)
             src.unlink(missing_ok=True)
 
-            return JSONResponse(content={
+            response = {
                 "download_url": register_download(zip_path),
                 "outputs": [out.name for out in outputs],
                 "count": len(outputs),
-            })
+            }
+            if review_info:
+                response["review_copies"] = review_info
+
+            return JSONResponse(content=response)
         except MediaToolError as exc:
             raise fail(temp_dir, 422, str(exc)) from exc
