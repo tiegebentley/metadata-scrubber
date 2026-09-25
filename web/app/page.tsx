@@ -31,6 +31,7 @@ const API = process.env.NEXT_PUBLIC_SCRUBMETA_API || "/backend";
 const MAX = 500 * 1024 * 1024;
 const ACCEPT = ".jpg,.jpeg,.tif,.tiff,.png,.webp,.heic,.mp4,.mov,.m4v,.mkv,.webm,.gif";
 const ACCEPT_IMAGES = ".jpg,.jpeg,.png,.webp,.tif,.tiff,.gif";
+const ACCEPT_MEDIA = ".jpg,.jpeg,.png,.webp,.tif,.tiff,.gif,.mp4,.mov,.m4v,.mkv,.webm";
 
 const tools: { id: Tool; label: string; icon: typeof ShieldCheck }[] = [
   { id: "scrub", label: "Scrub", icon: ShieldCheck },
@@ -219,7 +220,7 @@ export default function Home() {
       </section>
 
       <input ref={picker} type="file" accept={ACCEPT} hidden onChange={onInput} />
-      <input ref={multiPicker} type="file" accept={ACCEPT_IMAGES} multiple hidden onChange={onMultiInput} />
+      <input ref={multiPicker} type="file" accept={ACCEPT_MEDIA} multiple hidden onChange={onMultiInput} />
     </div>
   );
 }
@@ -614,23 +615,23 @@ function Repurpose(p: ToolProps) {
 
 function Duplicates(p: { files: File[]; owned: boolean; setOwned: (v: boolean) => void; choose: () => void; clear: () => void; drop: (e: DragEvent<HTMLElement>) => void; record: ToolProps["record"] }) {
   const [threshold, setThreshold] = useState(90);
-  const { busy, error, result, progress, run } = useRun<{ threshold: number; files_scanned: number; matches: DupeMatch[] }>();
+  const { busy, error, result, progress, run } = useRun<{ threshold: number; files_scanned: number; matches: (DupeMatch & { media: string })[]; skipped?: { file: string; reason: string }[] }>();
   const total = p.files.reduce((n, f) => n + f.size, 0);
   async function go() {
     if (!p.files.length) return;
     const body = new FormData(); p.files.forEach((f) => body.append("files", f)); body.append("threshold", String(threshold));
     await run(async () => {
-      const r = await api<{ threshold: number; files_scanned: number; matches: DupeMatch[] }>("/api/duplicates", body);
-      p.record({ tool: "Duplicate scan", name: `${r.files_scanned} images`, size: total, output: `${r.matches.length} match${r.matches.length === 1 ? "" : "es"}` });
+      const r = await api<{ threshold: number; files_scanned: number; matches: (DupeMatch & { media: string })[]; skipped?: { file: string; reason: string }[] }>("/api/duplicates", body);
+      p.record({ tool: "Duplicate scan", name: `${r.files_scanned} files`, size: total, output: `${r.matches.length} match${r.matches.length === 1 ? "" : "es"}` });
       return r;
     });
   }
   return (
     <ToolPage tabs={["Duplicate finder"]} active={0}>
-      <div className="centerTitle"><h1>Find duplicates in your library</h1><p>Select up to 100 of your own images. Exact copies and near-duplicates (resized, re-saved) are grouped together.</p></div>
-      {!p.files.length ? <DropZone title="Drop a set of images" sub="JPEG, PNG, WebP, TIFF, GIF · up to 100 files, 500 MB total" choose={p.choose} drop={p.drop} /> : (
+      <div className="centerTitle"><h1>Find duplicates in your library</h1><p>Select up to 100 of your own images, GIFs and videos. Exact copies and near-duplicates (resized, re-saved, re-encoded) are grouped together.</p></div>
+      {!p.files.length ? <DropZone title="Drop images, GIFs and videos" sub="JPEG, PNG, WebP, TIFF, GIF, MP4, MOV, M4V, MKV, WebM · up to 100 files, 500 MB total" choose={p.choose} drop={p.drop} /> : (
         <div className="panel">
-          <div className="fileTitle"><span>{p.files.length} images · {bytes(total)}</span><div><button onClick={p.choose} title="Choose different files"><FolderOpen /></button><button onClick={p.clear} title="Clear"><X /></button></div></div>
+          <div className="fileTitle"><span>{p.files.length} file{p.files.length === 1 ? "" : "s"} · {bytes(total)}</span><div><button onClick={p.choose} title="Choose different files"><FolderOpen /></button><button onClick={p.clear} title="Clear"><X /></button></div></div>
           <div className="fileChips">{p.files.slice(0, 24).map((f) => <span key={f.name + f.size}>{f.name}</span>)}{p.files.length > 24 && <span>+{p.files.length - 24} more</span>}</div>
           <Range label="Similarity threshold" value={threshold} onChange={setThreshold} min={50} max={100} suffix="%" />
           <Ownership owned={p.owned} setOwned={p.setOwned} />
@@ -640,8 +641,12 @@ function Duplicates(p: { files: File[]; owned: boolean; setOwned: (v: boolean) =
         <div className="panel">
           <h3>{result.matches.length} match{result.matches.length === 1 ? "" : "es"} at ≥ {result.threshold}% across {result.files_scanned} files</h3>
           {result.matches.length ? (
-            <div className="dupeList">{result.matches.map((m, i) => <div className="dupe" key={i}><span>{m.a}</span><i>↔</i><span>{m.b}</span><b><span className={`chip ${m.kind}`}>{m.kind}</span> {m.similarity.toFixed(1)}%</b></div>)}</div>
+            <div className="dupeList">{result.matches.map((m, i) => <div className="dupe" key={i}><span className={`chip ${m.media}`}>{m.media}</span><span>{m.a}</span><i>↔</i><span>{m.b}</span><b><span className={`chip ${m.kind}`}>{m.kind}</span> {m.similarity.toFixed(1)}%</b></div>)}</div>
           ) : <p className="muted">No pairs met the threshold. Lower it to catch looser near-duplicates.</p>}
+          {result.skipped && result.skipped.length > 0 && (
+            <><h3>Skipped files ({result.skipped.length})</h3>
+            <div className="fileChips">{result.skipped.map((s, i) => <span key={i} title={s.reason}>{s.file}</span>)}</div></>
+          )}
         </div>
       )}
       {error && <div className="error">{error}</div>}

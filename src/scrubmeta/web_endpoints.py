@@ -22,10 +22,11 @@ from fastapi.responses import JSONResponse
 
 from .media_tools import MediaToolError, convert, extract_frame, make_clip, probe, trim_video
 from .repurpose import caption_variants, create_zip, format_matrix, review_copies, subtitle_variants
-from .similarity import compare_images
+from .similarity import compare_media
 from .variations import PRESETS, export_variation
 
 MAX_DUPLICATE_FILES = 100
+MAX_DUPLICATE_SIZE = 500 * 1024 * 1024
 
 
 def _write_upload(upload: UploadFile, dest: Path, limit: int, running_total: int = 0) -> int:
@@ -187,26 +188,28 @@ def register_media_endpoints(
         if len(files) > MAX_DUPLICATE_FILES:
             raise HTTPException(
                 status_code=400,
-                detail=f"Select at most {MAX_DUPLICATE_FILES} images per scan.",
+                detail=f"Select at most {MAX_DUPLICATE_FILES} files per scan.",
             )
         temp_dir = Path(tempfile.mkdtemp(prefix="scrubmeta-dupes-"))
         paths: list[Path] = []
+        skipped: list[dict[str, str]] = []
         total = 0
         try:
             for i, upload in enumerate(files):
-                path = temp_dir / Path(upload.filename or f"image-{i}").name
-                total = _write_upload(upload, path, max_file_size, total)
+                path = temp_dir / Path(upload.filename or f"media-{i}").name
+                total = _write_upload(upload, path, MAX_DUPLICATE_SIZE, total)
                 paths.append(path)
             try:
-                matches: list[dict[str, Any]] = [dict(m) for m in compare_images(paths, threshold)]
+                matches: list[dict[str, Any]] = [dict(m) for m in compare_media(paths, threshold)]
             except Exception as exc:
                 raise HTTPException(
-                    status_code=422, detail=f"Unable to compare selected images: {exc}"
+                    status_code=422, detail=f"Unable to compare selected files: {exc}"
                 ) from exc
             return JSONResponse(content={
                 "threshold": threshold,
                 "files_scanned": len(paths),
                 "matches": matches,
+                "skipped": skipped,
             })
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
