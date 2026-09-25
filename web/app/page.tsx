@@ -29,9 +29,14 @@ type HistoryItem = { id: string; tool: string; name: string; size: number; compl
 // NEXT_PUBLIC_SCRUBMETA_API is inlined at build time; unset, the /backend rewrite is used (dev).
 const API = process.env.NEXT_PUBLIC_SCRUBMETA_API || "/backend";
 const MAX = 500 * 1024 * 1024;
-const ACCEPT = ".jpg,.jpeg,.tif,.tiff,.png,.webp,.heic,.mp4,.mov,.m4v,.mkv,.webm,.gif";
-const ACCEPT_IMAGES = ".jpg,.jpeg,.png,.webp,.tif,.tiff,.gif";
-const ACCEPT_MEDIA = ".jpg,.jpeg,.png,.webp,.tif,.tiff,.gif,.mp4,.mov,.m4v,.mkv,.webm";
+// Supported extensions, checked after selection. The file inputs deliberately
+// carry NO `accept` attribute: on Android, a media-only accept makes Chrome open
+// the system photo picker, which proxies (and may transcode) videos so the bytes
+// Chrome reads don't match the size it was given and uploads fail. With no
+// accept, Chrome opens the Files/document picker, which hands over the original.
+const EXTS = [".jpg", ".jpeg", ".tif", ".tiff", ".png", ".webp", ".heic", ".mp4", ".mov", ".m4v", ".mkv", ".webm", ".gif"];
+const EXTS_MEDIA = [".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".gif", ".mp4", ".mov", ".m4v", ".mkv", ".webm"];
+function hasExt(f: File, exts: string[]) { const n = f.name.toLowerCase(); return exts.some((e) => n.endsWith(e)); }
 
 const tools: { id: Tool; label: string; icon: typeof ShieldCheck }[] = [
   { id: "scrub", label: "Scrub", icon: ShieldCheck },
@@ -168,12 +173,21 @@ export default function Home() {
     catch { setHealth("offline"); }
   }
 
+  const [pickError, setPickError] = useState("");
   function pick(f: File | null) {
-    if (f && f.size > MAX) { alert("Maximum file size is 500 MB."); return; }
+    setPickError("");
+    if (f && !hasExt(f, EXTS)) { setPickError(`"${f.name}" isn't a supported type. Supported: ${EXTS.join(" ")}`); return; }
+    if (f && f.size > MAX) { setPickError("Maximum file size is 500 MB."); return; }
     setFile(f);
   }
   function onInput(e: ChangeEvent<HTMLInputElement>) { pick(e.target.files?.[0] || null); e.target.value = ""; }
-  function onMultiInput(e: ChangeEvent<HTMLInputElement>) { setFiles(Array.from(e.target.files || []).slice(0, 100)); e.target.value = ""; }
+  function onMultiInput(e: ChangeEvent<HTMLInputElement>) {
+    const all = Array.from(e.target.files || []);
+    const ok = all.filter((f) => hasExt(f, EXTS_MEDIA));
+    setPickError(ok.length < all.length ? `${all.length - ok.length} file(s) skipped: unsupported type.` : "");
+    setFiles(ok.slice(0, 100));
+    e.target.value = "";
+  }
   function drop(e: DragEvent<HTMLElement>) {
     e.preventDefault();
     if (tool === "duplicates") setFiles(Array.from(e.dataTransfer.files || []).slice(0, 100));
@@ -207,6 +221,7 @@ export default function Home() {
       </aside>
 
       <section className="shell">
+        {pickError && <div className="error" style={{ margin: "16px 16px 0" }}>{pickError}</div>}
         <header className="mobileHead"><button onClick={() => setMobile((v) => !v)} aria-label="Menu"><Menu /></button><b>Scrubmeta</b><div className={`healthDot ${health}`} /></header>
         {tool === "scrub" && <Scrub {...common} />}
         {tool === "inspect" && <Inspect {...common} />}
@@ -219,8 +234,8 @@ export default function Home() {
         {tool === "settings" && <SettingsView health={health} ping={ping} />}
       </section>
 
-      <input ref={picker} type="file" accept={ACCEPT} hidden onChange={onInput} />
-      <input ref={multiPicker} type="file" accept={ACCEPT_MEDIA} multiple hidden onChange={onMultiInput} />
+      <input ref={picker} type="file" hidden onChange={onInput} />
+      <input ref={multiPicker} type="file" multiple hidden onChange={onMultiInput} />
     </div>
   );
 }
